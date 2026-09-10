@@ -1,0 +1,128 @@
+<meta charset="utf-8">
+<title>Lacrima — option A, cinema</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles/tokens.css">
+<style>
+  .hero {
+    position: relative; height: 440px; padding: var(--pad);
+    display: flex; flex-direction: column; justify-content: flex-end;
+    background: #4a241c;
+    background-clip: padding-box;
+    border-bottom: 1px solid var(--border);
+  }
+  .hero::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--canvas) 92%, transparent) 0%, color-mix(in srgb, var(--canvas) 55%, transparent) 45%, color-mix(in srgb, var(--canvas) 20%, transparent) 100%),
+                linear-gradient(0deg, var(--canvas) 2%, transparent 40%);
+  }
+  .hero > * { position: relative; z-index: 1; max-width: 560px; }
+  .hero p { color: var(--tx2); font-size: 14px; margin: 12px 0 20px; }
+  .meta { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+  .acts { display: flex; gap: 10px; }
+  main { padding: 28px var(--pad) 60px; display: flex; flex-direction: column; gap: 34px; }
+  .cont { display: grid; grid-auto-flow: column; grid-auto-columns: 260px; gap: var(--gap); overflow-x: auto; }
+  .cont-card {
+    border: 1px solid var(--border); border-radius: var(--r-card);
+    overflow: hidden; background: var(--s1); cursor: pointer;
+  }
+  .cont-art { height: 120px; }
+  .cont-b { padding: 10px 12px 12px; }
+</style>
+
+<div class="topbar">
+  <div class="brand"><img src="../public/logo.png" alt="Lacrima" width="40" height="40"></div>
+  <div class="tabs">
+    <div class="tab on">Home</div><div class="tab">Anime</div>
+    <div class="tab">Manga</div><div class="tab">Novels</div><div class="tab">Yours</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="search">Search everything</div>
+  <div class="health"><span class="dot" style="background:var(--ok)"></span> 4 sources</div>
+  <div class="pfp">L</div>
+</div>
+
+<div class="hero">
+  <div class="mono">Because you finished Vinland Saga</div>
+  <h1>Frieren: Beyond Journey's End</h1>
+  <div class="meta">
+    <span class="badge">92% match</span>
+    <span class="badge">Anime</span>
+    <span class="badge">28 episodes</span>
+    <span style="color:var(--tx3);font-size:12px">Fantasy · Drama · Adventure</span>
+  </div>
+  <p>An elf mage outlives the party she saved the world with, and sets out to
+     understand the humans she never took the time to know.</p>
+  <div class="acts">
+    <div class="btn primary">▶ Play episode 1</div>
+    <div class="btn">+ My list</div>
+    <div class="btn">Details</div>
+  </div>
+</div>
+
+<main>
+  <section>
+    <div class="row-h"><h2>Continue</h2><a href="#">Across all media</a></div>
+    <div class="cont">
+      <div class="cont-card"><div class="cont-art p1"></div><div class="cont-b">
+        <div style="display:flex;justify-content:space-between;gap:8px"><h3>Vinland Saga</h3><span class="mono">S2·E19</span></div>
+        <div style="color:var(--tx3);font-size:12px;margin:2px 0 8px">14 min left</div>
+        <div class="progress"><i style="width:62%"></i></div></div></div>
+      <div class="cont-card"><div class="cont-art p2"></div><div class="cont-b">
+        <div style="display:flex;justify-content:space-between;gap:8px"><h3>Chainsaw Man</h3><span class="mono">Ch. 158</span></div>
+        <div style="color:var(--tx3);font-size:12px;margin:2px 0 8px">page 9 of 21</div>
+        <div class="progress"><i style="width:43%"></i></div></div></div>
+      <div class="cont-card"><div class="cont-art p6"></div><div class="cont-b">
+        <div style="display:flex;justify-content:space-between;gap:8px"><h3>Mushoku Tensei</h3><span class="mono">Vol. 9</span></div>
+        <div style="color:var(--tx3);font-size:12px;margin:2px 0 8px">novel · 38%</div>
+        <div class="progress"><i style="width:38%"></i></div></div></div>
+      <div class="cont-card"><div class="cont-art p3"></div><div class="cont-b">
+        <div style="display:flex;justify-content:space-between;gap:8px"><h3>Dandadan</h3><span class="mono">Ch. 202</span></div>
+        <div style="color:var(--tx3);font-size:12px;margin:2px 0 8px">page 3 of 18</div>
+        <div class="progress"><i style="width:17%"></i></div></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row-h"><h2>New from your list</h2><a href="#">Mark all seen</a></div>
+    <div class="rail">
+      <div class="poster p3">Dandadan<span class="new-pip">Ch. 203</span></div>
+      <div class="poster p8">Jujutsu Kaisen<span class="new-pip">Ch. 271</span></div>
+      <div class="poster p5">Kagurabachi<span class="new-pip">Ch. 88</span></div>
+      <div class="poster p6">Frieren<span class="new-pip">E. 29</span></div>
+      <div class="poster p1">Shadow Slave<span class="new-pip">Ch. 2211</span></div>
+      <div class="poster p4">Sakamoto Days<span class="new-pip">E. 12</span></div>
+      <div class="poster p7">Oshi no Ko</div><div class="poster p2">One Punch Man</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row-h"><h2>Popular this week</h2><a href="#">See all</a></div>
+    <div class="rail">
+      <div class="poster p4">Sakamoto Days</div><div class="poster p5">Kagurabachi</div>
+      <div class="poster p7">Oshi no Ko</div><div class="poster p1">Blue Lock</div>
+      <div class="poster p8">Jujutsu Kaisen</div><div class="poster p2">One Punch Man</div>
+      <div class="poster p6">Apothecary Diaries</div><div class="poster p3">Kaiju No. 8</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row-h"><h2>Because you read Berserk</h2><a href="#">Why this?</a></div>
+    <div class="rail">
+      <div class="poster p2">Vagabond</div><div class="poster p1">Vinland Saga</div>
+      <div class="poster p5">Kingdom</div><div class="poster p7">Claymore</div>
+      <div class="poster p3">Dorohedoro</div><div class="poster p8">Blame!</div>
+      <div class="poster p4">Attack on Titan</div><div class="poster p6">Made in Abyss</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="row-h"><h2>Top novels</h2><a href="#">See all</a></div>
+    <div class="rail">
+      <div class="poster p6">Lord of the Mysteries</div><div class="poster p4">Overlord</div>
+      <div class="poster p8">Re:Zero</div><div class="poster p3">Shadow Slave</div>
+      <div class="poster p1">Cradle</div><div class="poster p5">Beware of Chicken</div>
+      <div class="poster p2">Sousou no Frieren</div><div class="poster p7">Solo Leveling</div>
+    </div>
+  </section>
+</main>

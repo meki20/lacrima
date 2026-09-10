@@ -1,0 +1,28 @@
+# Lacrima is reached over Tailscale, so there is no public DNS and no public
+# certificate authority. Two ways to get HTTPS; pick one.
+#
+# 1. Tailscale issues the cert (recommended — real cert, no warnings):
+#
+#      tailscale cert <machine>.<tailnet>.ts.net
+#      mv <machine>.<tailnet>.ts.net.{crt,key} ./certs/
+#
+#    then replace `:80` below with the machine name and uncomment the tls line.
+#
+# 2. Skip TLS entirely. Traffic inside a tailnet is already WireGuard-encrypted,
+#    so plain HTTP over it is not the hole it would be on a LAN. This is the
+#    default here because it works the moment you run `docker compose up`.
+
+:80 {
+	# tls /certs/<machine>.<tailnet>.ts.net.crt /certs/<machine>.<tailnet>.ts.net.key
+
+	encode zstd gzip
+
+	# Page images are immutable and large; let Caddy hold the connection open
+	# long enough for a source that is slow to first byte.
+	reverse_proxy lacrima:3000 {
+		flush_interval -1
+		transport http {
+			response_header_timeout 120s
+		}
+	}
+}

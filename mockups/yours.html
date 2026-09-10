@@ -1,0 +1,267 @@
+<meta charset="utf-8">
+<title>Lacrima — yours</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles/tokens.css">
+<style>
+  .wall {
+    position: relative; padding: 46px var(--pad) 28px;
+    background: #1d2733; border-bottom: 1px solid var(--border);
+  }
+  .wall::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(0deg, var(--canvas) 1%, rgba(10,10,10,.3) 72%);
+  }
+  .wall > * { position: relative; z-index: 1; }
+  .greet { display: flex; align-items: center; gap: 15px; }
+  .greet .pfp { width: 52px; height: 52px; font-size: 19px; }
+  .greet h1 { font-size: 29px; }
+  .greet .btn { margin-left: auto; }
+  .streak { display: flex; gap: 34px; margin-top: 22px; }
+  .stat b { display: block; font-size: 21px; font-weight: 500; letter-spacing: -0.03em; }
+  .stat span { font-size: 12px; color: var(--tx2); }
+
+  main { padding: 26px var(--pad) 70px; display: flex; flex-direction: column; gap: 32px; }
+  .bento { display: grid; grid-template-columns: 1.75fr 1fr; gap: var(--gap); align-items: stretch; }
+  .tile {
+    border: 1px solid var(--border); border-radius: var(--r-card);
+    background: var(--s1); padding: 15px 16px 16px; position: relative;
+  }
+  .tile.shelf { display: flex; flex-direction: column; overflow: hidden; }
+  .pinned {
+    flex: 1; min-height: 0; margin-top: 11px;
+    display: flex; gap: 11px; overflow-x: auto; overflow-y: hidden;
+    scroll-snap-type: x proximity; scroll-behavior: smooth;
+    scrollbar-width: none;
+  }
+  .pinned::-webkit-scrollbar { display: none; }
+  .pinned .poster {
+    height: 100%; width: auto; aspect-ratio: 3 / 4;
+    flex: 0 0 auto; scroll-snap-align: start;
+  }
+  .nudge {
+    width: 24px; height: 24px; border-radius: var(--r-ctl);
+    border: 1px solid var(--border); background: var(--s2); color: var(--tx2);
+    display: grid; place-items: center; cursor: pointer; font-size: 13px; padding: 0;
+  }
+  .nudge:hover { border-color: var(--border-strong); color: var(--tx); }
+  .sticker {
+    position: absolute; width: 40px; height: 40px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 16px;
+    border: 1px solid var(--border-strong); background: var(--s3); cursor: grab;
+  }
+  .chars { display: flex; gap: 14px; margin-top: 11px; flex-wrap: wrap; }
+  .char { text-align: center; width: 72px; }
+  .char > div:first-child {
+    width: 72px; height: 72px; border-radius: 50%; margin-bottom: 6px;
+    border: 1px solid var(--border);
+  }
+  .char span { font-size: 11px; color: var(--tx2); }
+
+  .stick-grid { display: grid; grid-template-columns: repeat(auto-fill, 52px); gap: 11px; margin-top: 12px; }
+  .slot {
+    width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 18px; border: 1px solid var(--border); background: var(--s2);
+  }
+  .slot.locked { background: transparent; border-style: dashed; color: var(--tx3); font-size: 13px; }
+
+  .filters { display: flex; gap: 6px; margin: 14px 0 18px; flex-wrap: wrap; align-items: center; }
+  .chip {
+    padding: 4px 11px; border: 1px solid var(--border); border-radius: 999px;
+    font-size: 12px; color: var(--tx2); cursor: pointer;
+  }
+  .chip.on { background: var(--tx); color: var(--canvas); border-color: var(--tx); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px 15px; }
+  .card { cursor: pointer; }
+  .card .poster { margin-bottom: 8px; }
+  .card h3 { font-size: 13px; margin-bottom: 3px; }
+  .stats { display: flex; gap: 8px; font-size: 11px; color: var(--tx3); font-family: var(--ff-mono); }
+
+  .dl { display: flex; flex-direction: column; gap: 10px; margin-top: 11px; }
+  .dl-r { display: flex; align-items: center; gap: 10px; }
+  .dl-r .poster { width: 30px; aspect-ratio: 2/3; border-radius: 4px; padding: 0; }
+  .dl-r h3 { font-size: 13px; } .dl-r span { font-size: 11px; color: var(--tx3); }
+</style>
+
+<div class="topbar">
+  <div class="brand"><img src="../public/logo.png" alt="Lacrima" width="40" height="40"></div>
+  <div class="tabs">
+    <div class="tab">Home</div><div class="tab">Anime</div>
+    <div class="tab">Manga</div><div class="tab">Novels</div><div class="tab on">Yours</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="search">Search everything</div>
+  <div class="health"><span class="dot" style="background:var(--ok)"></span> 4 sources</div>
+  <div class="pfp">L</div>
+</div>
+
+<div class="wall">
+  <div class="greet">
+    <div class="pfp">L</div>
+    <div>
+      <h1>Luka</h1>
+      <div style="color:var(--tx2);font-size:13px">Joined March 2025 · profile 1 of 4</div>
+    </div>
+    <div class="btn">Customise</div>
+  </div>
+  <div class="streak">
+    <div class="stat"><b>214</b><span>titles tracked</span></div>
+    <div class="stat"><b>1 840</b><span>chapters read</span></div>
+    <div class="stat"><b>318 h</b><span>watched</span></div>
+    <div class="stat"><b>12 d</b><span>current streak</span></div>
+    <div class="stat"><b>7 / 24</b><span>stickers earned</span></div>
+  </div>
+</div>
+
+<main>
+  <div class="bento">
+    <div class="tile shelf">
+      <div class="sticker" style="top:-13px;right:22px;transform:rotate(9deg)">🗡️</div>
+      <div class="sticker" style="top:30px;right:-15px;transform:rotate(-11deg)">🌙</div>
+      <div class="row-h" style="margin:0">
+        <h2>Pinned shelf</h2><a href="#">Rearrange</a>
+        <div class="spacer"></div>
+        <button class="nudge" data-dir="-1" aria-label="Scroll shelf left">‹</button>
+        <button class="nudge" data-dir="1" aria-label="Scroll shelf right">›</button>
+      </div>
+      <div class="pinned" id="shelf">
+        <div class="poster p1">Vinland Saga</div><div class="poster p2">Berserk</div>
+        <div class="poster p6">Frieren</div><div class="poster p4">Dungeon Meshi</div>
+        <div class="poster p3">Dorohedoro</div><div class="poster p8">Made in Abyss</div>
+        <div class="poster p5">Kingdom</div><div class="poster p7">Mushishi</div>
+        <div class="poster p1">Vagabond</div><div class="poster p6">Girls' Last Tour</div>
+      </div>
+    </div>
+
+    <div class="tile">
+      <div class="row-h" style="margin:0"><h2>Your characters</h2><a href="#">Edit</a></div>
+      <div class="chars">
+        <div class="char"><div class="p2"></div><span>Guts</span></div>
+        <div class="char"><div class="p1"></div><span>Thorfinn</span></div>
+        <div class="char"><div class="p6"></div><span>Frieren</span></div>
+        <div class="char"><div class="p4"></div><span>Laios</span></div>
+      </div>
+      <div style="margin-top:15px;padding-top:14px;border-top:1px solid var(--border)">
+        <span class="mono">Most read this month</span>
+        <div style="display:flex;flex-direction:column;gap:9px;margin-top:9px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:12px;width:74px;color:var(--tx2)">Manga</span>
+            <div class="progress" style="flex:1"><i style="width:78%"></i></div>
+            <span style="font-size:11px;color:var(--tx3);width:34px;text-align:right">62%</span></div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:12px;width:74px;color:var(--tx2)">Anime</span>
+            <div class="progress" style="flex:1"><i style="width:34%"></i></div>
+            <span style="font-size:11px;color:var(--tx3);width:34px;text-align:right">27%</span></div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:12px;width:74px;color:var(--tx2)">Novels</span>
+            <div class="progress" style="flex:1"><i style="width:14%"></i></div>
+            <span style="font-size:11px;color:var(--tx3);width:34px;text-align:right">11%</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section class="tile">
+    <div class="row-h" style="margin:0">
+      <h2>Sticker collection</h2>
+      <a href="#">7 earned · 17 locked</a>
+    </div>
+    <div class="stick-grid">
+      <div class="slot">🗡️</div><div class="slot">🌙</div><div class="slot">📖</div>
+      <div class="slot">🔥</div><div class="slot">🐉</div><div class="slot">☕</div>
+      <div class="slot">🌸</div>
+      <div class="slot locked">?</div><div class="slot locked">?</div><div class="slot locked">?</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:11px;margin-top:15px;padding-top:13px;border-top:1px solid var(--border)">
+      <span class="mono" style="white-space:nowrap">Next · night owl</span>
+      <div class="progress" style="flex:1"><i style="width:72%"></i></div>
+      <span style="font-size:11px;color:var(--tx3);white-space:nowrap">36 / 50 ch after midnight</span>
+    </div>
+  </section>
+
+  <section>
+    <div class="row-h"><h2>Your library</h2><a href="#">214 titles</a></div>
+    <div class="filters">
+      <div class="chip on">All</div><div class="chip">Anime</div>
+      <div class="chip">Manga</div><div class="chip">Novels</div>
+      <span style="width:14px"></span>
+      <div class="chip on">In progress</div><div class="chip">Planned</div>
+      <div class="chip">Completed</div><div class="chip">On hold</div><div class="chip">Dropped</div>
+      <span class="spacer"></span>
+      <div class="chip">Recently added ▾</div>
+    </div>
+    <div class="grid">
+      <div class="card"><div class="poster p1">Vinland Saga</div><h3>Vinland Saga</h3>
+        <div class="stats"><span>anime</span><span>19 / 48</span></div></div>
+      <div class="card"><div class="poster p2">Chainsaw Man</div><h3>Chainsaw Man</h3>
+        <div class="stats"><span>manga</span><span>158 / 195</span></div></div>
+      <div class="card"><div class="poster p6">Mushoku Tensei</div><h3>Mushoku Tensei</h3>
+        <div class="stats"><span>novel</span><span>vol 9 / 26</span></div></div>
+      <div class="card"><div class="poster p3">Dandadan</div><h3>Dandadan</h3>
+        <div class="stats"><span>manga</span><span>202 / 203</span></div></div>
+      <div class="card"><div class="poster p4">Dungeon Meshi</div><h3>Dungeon Meshi</h3>
+        <div class="stats"><span>anime</span><span>24 / 24</span></div></div>
+      <div class="card"><div class="poster p8">Made in Abyss</div><h3>Made in Abyss</h3>
+        <div class="stats"><span>anime</span><span>13 / 25</span></div></div>
+      <div class="card"><div class="poster p5">Kingdom</div><h3>Kingdom</h3>
+        <div class="stats"><span>manga</span><span>640 / 812</span></div></div>
+      <div class="card"><div class="poster p7">Oshi no Ko</div><h3>Oshi no Ko</h3>
+        <div class="stats"><span>anime</span><span>11 / 24</span></div></div>
+    </div>
+  </section>
+
+  <div class="bento">
+    <div class="tile">
+      <div class="row-h" style="margin:0"><h2>Downloaded</h2><a href="#">2.1 GB of 20 GB · manage</a></div>
+      <div class="progress" style="margin:4px 0 14px"><i style="width:11%"></i></div>
+      <div class="dl">
+        <div class="dl-r"><div class="poster p1"></div>
+          <div style="flex:1"><h3>Vinland Saga</h3><span>S2 · E19–24 · 1.4 GB</span></div>
+          <div class="badge">Offline</div></div>
+        <div class="dl-r"><div class="poster p2"></div>
+          <div style="flex:1"><h3>Chainsaw Man</h3><span>Ch. 150–158 · 340 MB</span></div>
+          <div class="badge">Offline</div></div>
+        <div class="dl-r"><div class="poster p6"></div>
+          <div style="flex:1"><h3>Mushoku Tensei</h3><span>Vol. 9 · 2 MB</span></div>
+          <div class="badge">Offline</div></div>
+      </div>
+    </div>
+
+    <div class="tile">
+      <div class="row-h" style="margin:0"><h2>Appearance</h2></div>
+      <div style="display:flex;flex-direction:column;gap:13px;margin-top:12px">
+        <div>
+          <span class="mono">Accent</span>
+          <div style="display:flex;gap:8px;margin-top:7px">
+            <div style="width:24px;height:24px;border-radius:50%;background:#c44532;outline:2px solid var(--tx);outline-offset:2px"></div>
+            <div style="width:24px;height:24px;border-radius:50%;background:#e8c56b"></div>
+            <div style="width:24px;height:24px;border-radius:50%;background:#8f151c"></div>
+            <div style="width:24px;height:24px;border-radius:50%;background:#e5484d"></div>
+            <div style="width:24px;height:24px;border-radius:50%;background:#46a758"></div>
+          </div>
+        </div>
+        <div>
+          <span class="mono">Wallpaper</span>
+          <div style="display:flex;gap:8px;margin-top:7px">
+            <div style="flex:1;height:36px;border-radius:6px;background:#2a1612;outline:2px solid var(--tx);outline-offset:2px"></div>
+            <div style="flex:1;height:36px;border-radius:6px;background:#3d2218"></div>
+            <div style="flex:1;height:36px;border-radius:6px;background:#2a2414"></div>
+            <div class="slot locked" style="flex:1;height:36px;aspect-ratio:auto;border-radius:6px">+</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  const shelf = document.getElementById("shelf");
+  for (const b of document.querySelectorAll(".nudge")) {
+    b.onclick = () => shelf.scrollBy({ left: +b.dataset.dir * shelf.clientWidth * 0.8 });
+  }
+  shelf.addEventListener("wheel", (e) => {
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    e.preventDefault();
+    shelf.scrollLeft += e.deltaY;
+  }, { passive: false });
+</script>

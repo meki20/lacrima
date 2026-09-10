@@ -1,0 +1,28 @@
+{
+  "name": "lacrima",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "node --test lib/**/*.test.ts"
+  },
+  "dependencies": {
+    "@vidstack/react": "^1.15.6",
+    "cheerio": "^1.2.0",
+    "dayjs": "^1.11.23",
+    "hls.js": "^1.7.2",
+    "htmlparser2": "^12.0.0",
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "webtorrent": "^3.0.21"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
+  }
+}

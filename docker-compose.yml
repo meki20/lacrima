@@ -1,0 +1,51 @@
+# `docker compose up -d`                 → just Suwayomi, for `npm run dev`.
+# `docker compose --profile serve up -d` → the whole thing behind Caddy.
+services:
+  suwayomi:
+    image: ghcr.io/suwayomi/suwayomi-server:stable
+    container_name: lacrima-suwayomi
+    restart: unless-stopped
+    ports:
+      - "4567:4567"
+    volumes:
+      - suwayomi:/home/suwayomi/.local/share/Tachidesk
+    environment:
+      TZ: Europe/Berlin
+
+  lacrima:
+    profiles: ["serve"]
+    build: .
+    container_name: lacrima
+    restart: unless-stopped
+    depends_on:
+      - suwayomi
+    volumes:
+      - lacrima-data:/data
+    environment:
+      TZ: Europe/Berlin
+      # Also the proxy allowlist: /api/proxy only relays to this host.
+      SUWAYOMI_URL: http://suwayomi:4567
+      LACRIMA_DB: /data/lacrima.db
+      # LACRIMA_LANGS: en,all
+
+  caddy:
+    profiles: ["serve"]
+    image: caddy:2-alpine
+    container_name: lacrima-caddy
+    restart: unless-stopped
+    depends_on:
+      - lacrima
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  suwayomi:
+  lacrima-data:
+  caddy-data:
+  caddy-config:
