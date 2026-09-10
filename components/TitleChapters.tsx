@@ -13,6 +13,8 @@ export default async function TitleChapters({
   here,
   hideSeasonChips,
   seasonHint,
+  episodeOffset,
+  episodeCount,
 }: {
   binding: Binding;
   kind: MediaKind;
@@ -22,6 +24,8 @@ export default async function TitleChapters({
   here: string;
   hideSeasonChips?: boolean;
   seasonHint?: number | null;
+  episodeOffset?: number;
+  episodeCount?: number | null;
 }) {
   const chapters = await chaptersFor(binding);
 
@@ -64,6 +68,8 @@ export default async function TitleChapters({
           base={`/read/${via}/${kind}/${id}/`}
           hideSeasons={hideSeasonChips}
           seasonHint={seasonHint}
+          episodeOffset={episodeOffset}
+          episodeCount={episodeCount}
         />
       ) : (
         <div className="rows scrollbox">

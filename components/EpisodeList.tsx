@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { windowEpisodes } from "@/lib/series";
 
 export type EpisodeRow = {
   id: string;
@@ -31,6 +32,8 @@ export default function EpisodeList({
   base,
   hideSeasons = false,
   seasonHint = null,
+  episodeOffset = 0,
+  episodeCount = null,
 }: {
   episodes: EpisodeRow[];
   readingId: string | null;
@@ -38,6 +41,9 @@ export default function EpisodeList({
   base: string;
   hideSeasons?: boolean;
   seasonHint?: number | null;
+  /** Absolute-position window for a multi-part franchise. See lib/series.ts. */
+  episodeOffset?: number;
+  episodeCount?: number | null;
 }) {
   const seasons = useMemo(() => {
     const set = new Set(episodes.map((e) => e.season ?? 1));
@@ -48,11 +54,11 @@ export default function EpisodeList({
     ? seasonHint
     : (seasons.find((s) => s > 0) ?? seasons[0] ?? 1);
   const [season, setSeason] = useState(initial);
-  const filter = hideSeasons ? (seasonHint && seasons.includes(seasonHint) ? seasonHint : null) : season;
-  const shown =
-    filter != null && seasons.length > 1
+  const shown = hideSeasons
+    ? windowEpisodes(episodes, episodeOffset, episodeCount, seasonHint)
+    : seasons.length > 1
       ? (() => {
-          const hit = episodes.filter((e) => (e.season ?? 1) === filter);
+          const hit = episodes.filter((e) => (e.season ?? 1) === season);
           return hit.length ? hit : episodes;
         })()
       : episodes;

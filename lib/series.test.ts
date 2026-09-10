@@ -5,8 +5,10 @@ import {
   assembleSeries,
   collapseSeries,
   colonPrefix,
+  episodeWindow,
   partLabel,
   seriesTitle,
+  windowEpisodes,
   type SeriesNode,
 } from "./series.ts";
 
@@ -164,4 +166,77 @@ test("assembleSeries keeps a sequel even if that node was not loaded", () => {
     [1, 2],
   );
   assert.equal(s.parts[1].label, "Season 2");
+});
+
+test("episodeWindow sums units of earlier parts, unknown counts as 0", () => {
+  const parts = [
+    { id: 1, units: 25 },
+    { id: 2, units: 12 },
+    { id: 3, units: null },
+  ];
+  assert.deepEqual(episodeWindow(parts, 1), { offset: 0, count: 25 });
+  assert.deepEqual(episodeWindow(parts, 2), { offset: 25, count: 12 });
+  assert.deepEqual(episodeWindow(parts, 3), { offset: 37, count: null });
+  assert.deepEqual(episodeWindow(parts, 999), { offset: 0, count: null });
+});
+
+const ep = (number: number, season: number | null = null) => ({ number, season });
+
+test("windowEpisodes slices a flattened multi-season list by absolute position", () => {
+  // A source that flattened two seasons under one bound id (the real bug):
+  // both parts see the exact same 50-episode list.
+  const flat = Array.from({ length: 50 }, (_, i) => ep(i + 1));
+  const season1 = windowEpisodes(flat, 0, 25, null);
+  const season2 = windowEpisodes(flat, 25, 25, null);
+  assert.equal(season1.length, 25);
+  assert.equal(season2.length, 25);
+  assert.deepEqual(
+    season1.map((e) => e.number),
+    Array.from({ length: 25 }, (_, i) => i + 1),
+  );
+  assert.deepEqual(
+    season2.map((e) => e.number),
+    Array.from({ length: 25 }, (_, i) => i + 26),
+  );
+  // No overlap between the two seasons.
+  const overlap = season1.filter((a) => season2.some((b) => b.number === a.number));
+  assert.equal(overlap.length, 0);
+});
+
+test("windowEpisodes leaves an already-scoped list alone", () => {
+  // The addon's own meta for this season only has 12 episodes — offset would
+  // point past the end of the list, so it must not be applied.
+  const scoped = Array.from({ length: 12 }, (_, i) => ep(i + 1));
+  const shown = windowEpisodes(scoped, 50, 12, null);
+  assert.equal(shown.length, 12);
+});
+
+test("windowEpisodes tolerates a couple of movies/specials mixed into a scoped list", () => {
+  const scoped = Array.from({ length: 14 }, (_, i) => ep(i + 1)); // 12 episodes + 2 specials
+  const shown = windowEpisodes(scoped, 25, 12, null);
+  assert.equal(shown.length, 14, "within slack, list is trusted whole");
+});
+
+test("windowEpisodes never returns empty when a slice or season tag is available", () => {
+  const flat = Array.from({ length: 50 }, (_, i) => ep(i + 1, 1)); // addon tags everything season 1
+  const shown = windowEpisodes(flat, 25, 25, 2); // seasonHint 2 matches nothing
+  assert.equal(shown.length, 25, "falls back to the position slice, not to an empty season filter");
+});
+
+test("windowEpisodes falls back to the season tag when the count is unknown and offset is out of range", () => {
+  const list = [...Array.from({ length: 5 }, (_, i) => ep(i + 1, 1)), ep(6, 2), ep(7, 2)];
+  const shown = windowEpisodes(list, 100, null, 2);
+  assert.deepEqual(
+    shown.map((e) => e.number),
+    [6, 7],
+  );
+});
+
+test("windowEpisodes takes the remainder for an unknown-count tail part", () => {
+  const flat = Array.from({ length: 30 }, (_, i) => ep(i + 1));
+  const shown = windowEpisodes(flat, 25, null, null); // ongoing final season, count not reported
+  assert.deepEqual(
+    shown.map((e) => e.number),
+    [26, 27, 28, 29, 30],
+  );
 });

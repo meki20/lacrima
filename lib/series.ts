@@ -233,6 +233,74 @@ export function assembleSeries(startId: number, nodes: Map<number, SeriesNode>):
   return { rootId, title: series, parts, specials };
 }
 
+export type EpisodeLike = { season?: number | null };
+
+/**
+ * Sum of `units` for every part before `selectedId` (series order), plus that
+ * part's own unit count. Unknown counts contribute 0 to the offset rather than
+ * breaking the walk — see CLAUDE.md on ongoing series reporting no count.
+ */
+export function episodeWindow(
+  parts: { id: number; units: number | null }[],
+  selectedId: number,
+): { offset: number; count: number | null } {
+  let offset = 0;
+  for (const p of parts) {
+    if (p.id === selectedId) return { offset, count: p.units };
+    offset += p.units ?? 0;
+  }
+  return { offset: 0, count: null };
+}
+
+/**
+ * Which episodes of a flat, addon-supplied list belong to this one part of a
+ * multi-season franchise.
+ *
+ * A source's own season tag on each episode is whatever numbering scheme that
+ * addon happens to use (IMDB-style, absent, or a flat "season 1" for the whole
+ * list) — it has no guaranteed relationship to how the metadata provider split
+ * the franchise into parts. Absolute position plus each part's own episode
+ * count is the stronger signal, same reasoning CLAUDE.md already applies to
+ * manga chapter counts ("count agreement beats title similarity"). The season
+ * tag is kept only as a fallback so an unknown or wrong count never produces
+ * zero episodes.
+ *
+ * `episodes` is trusted to already be in chronological order — every backend's
+ * `chapters()` sorts by season then episode number before returning, and the
+ * addon's own episode *numbers* often restart per season, so re-sorting by
+ * number here would scramble a flat multi-season list instead of slicing it.
+ */
+export function windowEpisodes<T extends EpisodeLike>(
+  episodes: T[],
+  offset: number,
+  count: number | null,
+  seasonHint: number | null,
+): T[] {
+  if (episodes.length === 0) return episodes;
+  const bySeason = seasonHint != null ? episodes.filter((e) => (e.season ?? 1) === seasonHint) : [];
+  const fallback = bySeason.length ? bySeason : episodes;
+
+  // ponytail: flat slack for a stray movie/special mixed into an otherwise
+  // single-season list; upgrade to a ratio if a real addon needs it.
+  const SLACK = 3;
+  if (count != null && Math.abs(episodes.length - count) <= SLACK) {
+    // The list already covers just this part — nothing to slice.
+    return episodes;
+  }
+
+  if (count != null && offset + count <= episodes.length) {
+    const slice = episodes.slice(offset, offset + count);
+    if (slice.length) return slice;
+  } else if (offset > 0 && offset < episodes.length) {
+    // Count unknown (an ongoing final season) — take what's left after the
+    // earlier parts.
+    const rest = episodes.slice(offset);
+    if (rest.length) return rest;
+  }
+
+  return fallback;
+}
+
 const TTL = 30 * 60_000;
 const memo = new Map<string, { at: number; v: Series }>();
 const inflight = new Map<string, Promise<Series>>();

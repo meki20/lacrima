@@ -11,7 +11,7 @@ import { currentProfile } from "@/lib/profile";
 import { getProgress, parseAnchor } from "@/lib/progress";
 import { pinBinding, resolveSource } from "@/lib/resolve";
 import { backend } from "@/lib/sources";
-import { fetchSeries, seriesTitle, type Series } from "@/lib/series";
+import { episodeWindow, fetchSeries, seriesTitle, type Series } from "@/lib/series";
 
 export const dynamic = "force-dynamic";
 
@@ -85,10 +85,30 @@ export default async function Title({
       ? selected
       : { ...m, title: series.title, aliases: selected.aliases };
 
-  const [res, me] = await Promise.all([
+  // Each season's own episode count, so the flat episode list a source addon
+  // returns can be sliced by absolute position instead of trusting whatever
+  // season numbering that addon happens to use. See lib/series.ts windowEpisodes.
+  const seriesParts = series?.parts ?? [];
+  const wantsWindow = seriesParts.length > 1 && selectedMeta?.kind !== "special";
+
+  const [res, me, partUnits] = await Promise.all([
     viewingSpecials ? Promise.resolve(null) : resolveSource(forResolve, change || Boolean(q), q || undefined),
     currentProfile(),
+    wantsWindow
+      ? Promise.all(
+          seriesParts.map((p) =>
+            p.id === m.id ? media : p.id === selectedId ? selectedMedia : fetchTitle(slug, mediaKind, p.id),
+          ),
+        )
+      : Promise.resolve([] as Awaited<ReturnType<typeof fetchTitle>>[]),
   ]);
+
+  const { offset: episodeOffset, count: episodeCount } = wantsWindow
+    ? episodeWindow(
+        seriesParts.map((p, i) => ({ id: p.id, units: partUnits[i]?.ok ? partUnits[i].value.units : null })),
+        selectedId,
+      )
+    : { offset: 0, count: null };
 
   const returnTo = partHref(here, viewingSpecials ? "specials" : selectedId, false, firstId);
 
@@ -255,6 +275,8 @@ export default async function Title({
                   here={returnTo}
                   hideSeasonChips={Boolean(series && series.parts.length > 1)}
                   seasonHint={Number(/^Season (\d+)$/i.exec(selectedMeta?.label ?? "")?.[1] ?? "") || null}
+                  episodeOffset={episodeOffset}
+                  episodeCount={episodeCount}
                 />
               </Suspense>
             )}
