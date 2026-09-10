@@ -3,12 +3,14 @@ import { redirect } from "next/navigation";
 import MatchList from "@/components/MatchList";
 import TitleChapters from "@/components/TitleChapters";
 import TopBar from "@/components/TopBar";
+import WatchCta from "@/components/WatchCta";
 import { Failed } from "@/components/ui";
 import type { MediaKind, ProviderSlug } from "@/lib/media";
 import { searchTitles } from "@/lib/match";
 import { fetchTitle } from "@/lib/metadata";
+import { navTabForKind } from "@/lib/nav";
 import { currentProfile } from "@/lib/profile";
-import { getProgress, parseAnchor } from "@/lib/progress";
+import { getProgress, parseAnchor, unitPip } from "@/lib/progress";
 import { pinBinding, resolveSource } from "@/lib/resolve";
 import { backend } from "@/lib/sources";
 import { episodeWindow, fetchSeries, seriesTitle, type Series } from "@/lib/series";
@@ -58,7 +60,7 @@ export default async function Title({
   if (!media.ok) {
     return (
       <>
-        <TopBar />
+        <TopBar active={navTabForKind(mediaKind)} />
         <main>
           <Failed reason={media.reason} />
         </main>
@@ -129,7 +131,8 @@ export default async function Title({
 
   const resolution = res?.ok ? res.value : null;
   const binding = resolution?.binding ?? null;
-  const anchor = parseAnchor(getProgress(me.id, selected.via, selected.id)?.anchor ?? null);
+  const progressRow = getProgress(me.id, selected.via, selected.id);
+  const anchor = parseAnchor(progressRow?.anchor ?? null);
   const readingId =
     anchor?.kind === "page" || anchor?.kind === "seconds" ? String(anchor.chapterId) : null;
   const unit = selected.kind === "anime" ? "episode" : "chapter";
@@ -139,14 +142,21 @@ export default async function Title({
         label: "Continue",
       }
     : null;
+  const resumeHint =
+    anchor?.kind === "page"
+      ? `p.${anchor.index + 1}`
+      : progressRow
+        ? unitPip(selected.kind, progressRow.unit, anchor?.kind === "seconds" ? anchor.season : null)
+        : null;
 
   const heading = series?.title || seriesTitle(m.title);
   const specialsOn =
     viewingSpecials || (selectedMeta?.kind === "special" && selectedMeta.id === selectedId);
+  const seasonHint = Number(/^Season (\d+)$/i.exec(selectedMeta?.label ?? "")?.[1] ?? "") || null;
 
   return (
     <>
-      <TopBar />
+        <TopBar active={navTabForKind(m.kind)} />
 
       <div
         className="hero"
@@ -164,18 +174,19 @@ export default async function Title({
           <span style={{ color: "var(--tx3)", fontSize: 12 }}>{m.genres.slice(0, 3).join(" · ")}</span>
         </div>
         <p>{m.description}</p>
-        {resume && (
-          <div className="acts">
-            <a className="btn primary" href={resume.href}>
-              {resume.label}
-              {anchor?.kind === "page" && (
-                <span className="mono" style={{ color: "inherit", opacity: 0.7 }}>
-                  p.{anchor.index + 1}
-                </span>
-              )}
-            </a>
-          </div>
-        )}
+        <Suspense fallback={null}>
+          <WatchCta
+            resume={resume}
+            pageLabel={resumeHint}
+            binding={binding}
+            kind={selected.kind}
+            via={selected.via}
+            id={selected.id}
+            episodeOffset={episodeOffset}
+            episodeCount={episodeCount}
+            seasonHint={seasonHint}
+          />
+        </Suspense>
       </div>
 
       <main>
@@ -274,7 +285,7 @@ export default async function Title({
                   readingId={readingId}
                   here={returnTo}
                   hideSeasonChips={Boolean(series && series.parts.length > 1)}
-                  seasonHint={Number(/^Season (\d+)$/i.exec(selectedMeta?.label ?? "")?.[1] ?? "") || null}
+                  seasonHint={seasonHint}
                   episodeOffset={episodeOffset}
                   episodeCount={episodeCount}
                 />

@@ -28,6 +28,14 @@ import {
 } from "@/lib/subs";
 import { pushProgress, type ProgressWrite } from "@/lib/progress-write";
 import { withCacheParams } from "@/lib/play-cache-client";
+import { nextUpCountdown, toggleSubChoice } from "@/lib/nextup";
+import {
+  bufferedEnd,
+  fmtClock,
+  fmtRemaining,
+  planSeek,
+  scrubPercents,
+} from "@/lib/seek";
 import {
   browserPlayable,
   isMixedRaceUrl,
@@ -60,27 +68,6 @@ import {
 } from "@vidstack/react";
 
 const langLabel = (id: Lang) => LANGS.find((l) => l.id === id)?.label ?? id;
-
-/** Seek inside a range, staying a hair before the end so we do not stall. */
-function clampBuffered(media: HTMLVideoElement, time: number): number | null {
-  const ranges = media.buffered;
-  for (let i = 0; i < ranges.length; i++) {
-    const start = ranges.start(i);
-    const end = ranges.end(i);
-    if (time >= start && time <= end) return Math.min(time, Math.max(start, end - 0.05));
-  }
-  return null;
-}
-
-function fmt(s: number) {
-  if (!Number.isFinite(s) || s < 0) return "0:00";
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
-  const mm = h ? String(m).padStart(2, "0") : String(m);
-  const ss = String(sec).padStart(2, "0");
-  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
-}
 
 function Icon({ d, filled = true }: { d: string; filled?: boolean }) {
   return (
@@ -171,18 +158,21 @@ function Wait({ finding }: { finding: string | null }) {
 function RemuxTimeline({
   position,
   duration,
+  buffered,
   onSeek,
 }: {
   position: number;
   duration: number | null;
+  buffered: number;
   onSeek: (seconds: number) => void;
 }) {
   const [draft, setDraft] = useState<number | null>(null);
   const shown = Math.min(duration ?? position, draft ?? position);
   const fill = duration ? `${(shown / duration) * 100}%` : "0%";
+  const buf = duration ? `${Math.max(shown / duration, buffered) * 100}%` : "0%";
 
   if (!duration) {
-    return <span className="player-remain">{fmt(position)}</span>;
+    return <span className="player-remain">{fmtClock(position)}</span>;
   }
 
   const commit = (value: string) => {
@@ -196,9 +186,10 @@ function RemuxTimeline({
     <>
       <div
         className="scrub-v"
-        style={{ "--slider-fill": fill } as CSSProperties}
+        style={{ "--slider-fill": fill, "--slider-progress": buf } as CSSProperties}
       >
         <div className="scrub-track">
+          <div className="scrub-buf" />
           <div className="scrub-fill" />
         </div>
         <span className="scrub-thumb" />
@@ -219,9 +210,7 @@ function RemuxTimeline({
           }}
         />
       </div>
-      <span className="player-remain">
-        {fmt(shown)} / {fmt(duration)}
-      </span>
+      <span className="player-remain">{fmtRemaining(duration, shown)}</span>
     </>
   );
 }
@@ -231,6 +220,7 @@ export default function Player({
   episodeLabel,
   backHref,
   nextHref,
+  nextLabel,
   playUrl,
   warmUrl,
   initialTime,
@@ -241,6 +231,7 @@ export default function Player({
   episodeLabel: string;
   backHref: string;
   nextHref: string | null;
+  nextLabel?: string | null;
   playUrl: string;
   warmUrl?: string | null;
   initialTime: number;
@@ -281,6 +272,10 @@ export default function Player({
   const [fromCache, setFromCache] = useState(false);
   /** Dismissed per episode: it is news the first time, nagging by the third. */
   const [langNoteOff, setLangNoteOff] = useState(false);
+  const [clockDuration, setClockDuration] = useState(durationSeconds);
+  const [bufferedPct, setBufferedPct] = useState(0);
+  const [ended, setEnded] = useState(false);
+  const [nextCancelled, setNextCancelled] = useState(false);
   const [cues, setCues] = useState<SubCue[]>([]);
   const [subErr, setSubErr] = useState<string | null>(null);
   const [subLoading, setSubLoading] = useState(true);
@@ -304,6 +299,11 @@ export default function Player({
   const committed = useRef<string | null>(null);
   const warmed = useRef(false);
   const playedFor = useRef(0);
+  const lastSub = useRef<string | null>(
+    typeof window === "undefined" || subLang === "off" ? null : subLang,
+  );
+  const durationRef = useRef(durationSeconds);
+  durationRef.current = clockDuration;
   const gone = useRef(false);
   const stall = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leave = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -319,6 +319,8 @@ export default function Player({
   const writeProgress = useCallback(
     (seconds: number) => {
       if (seconds <= 1) return;
+      const duration = durationRef.current;
+      const season = progress.season;
       pushProgress({
         ...progress,
         anchor: {
@@ -326,6 +328,8 @@ export default function Player({
           at: seconds,
           chapterId: String(progress.chapterId),
           chapterName: progress.chapterName,
+          ...(duration && duration > 1 ? { duration } : {}),
+          ...(season != null && season > 0 ? { season } : {}),
         },
       });
     },
@@ -645,27 +649,26 @@ export default function Player({
 
   const seekTo = useCallback(
     (seconds: number) => {
-      const next = Math.max(0, Math.min(durationSeconds ?? seconds, seconds));
+      const cap = clockDuration ?? seconds;
+      const next = Math.max(0, Math.min(cap, seconds));
       clearStall();
       resume.current = next;
       setPosition(next);
       const media = document.querySelector<HTMLVideoElement>(".player-root video");
-      if (media && native.current) {
-        media.currentTime = next;
-        return;
-      }
-      /* In-buffer = currentTime only. Never setStartAt when the bytes are here —
-         that kills ffmpeg, MSE, and the buffer. See CLAUDE.md. */
-      const rel = next - startAt;
-      const hit = media && rel >= 0 ? clampBuffered(media, rel) : null;
-      if (media && hit != null) {
-        media.currentTime = hit;
+      const plan = planSeek({
+        next,
+        startAt,
+        native: native.current,
+        ranges: media?.buffered ?? null,
+      });
+      if (plan.kind === "currentTime") {
+        if (media) media.currentTime = plan.time;
         return;
       }
       seeded.current = null;
-      setStartAt(next);
+      setStartAt(plan.startAt);
     },
-    [clearStall, durationSeconds, startAt],
+    [clearStall, clockDuration, startAt],
   );
 
   const seekBy = useCallback(
@@ -762,13 +765,25 @@ export default function Player({
        far into the episode it actually is. Everything outside the player — the
        saved anchor, the next resume, the progress row — wants the real position. */
     const tick = setInterval(() => {
-      const currentTime =
-        document.querySelector<HTMLVideoElement>(".player-root video")?.currentTime ?? 0;
+      const media = document.querySelector<HTMLVideoElement>(".player-root video");
+      const currentTime = media?.currentTime ?? 0;
       if (currentTime > 1) {
         const absolute = native.current ? currentTime : startAt + currentTime;
         playedFor.current = Math.max(playedFor.current, currentTime);
         resume.current = absolute;
         setPosition((old) => Math.floor(old) === Math.floor(absolute) ? old : absolute);
+        const duration = durationRef.current;
+        if (duration && duration > 1) {
+          const end = bufferedEnd(media?.buffered ?? null);
+          const { buffered } = scrubPercents({
+            position: absolute,
+            duration,
+            startAt,
+            native: native.current,
+            bufferedEnd: end,
+          });
+          setBufferedPct((old) => (Math.abs(old - buffered) < 0.005 ? old : buffered));
+        }
       }
       const now = Math.floor(resume.current);
       if (now > 1 && now !== last && Date.now() - lastWrite >= 5_000) {
@@ -796,6 +811,14 @@ export default function Player({
         seekBy(10);
       } else if (e.key === "Escape" && !document.fullscreenElement) router.push(backHref);
       else if (e.key === "n" && nextHref) router.push(nextHref);
+      else if (e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        setSubLang((cur) => {
+          const next = toggleSubChoice(cur, lastSub.current);
+          localStorage.setItem("lacrima-subs", next);
+          return next;
+        });
+      }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -858,6 +881,19 @@ export default function Player({
     return () => clearInterval(id);
   }, [src, startAt, subSync, mse.origin]);
 
+  useEffect(() => {
+    if (subLang !== "off") lastSub.current = subLang;
+  }, [subLang]);
+
+  const countdown = nextUpCountdown({
+    position,
+    duration: clockDuration,
+    ended,
+    watchedSeconds: playedFor.current,
+    cancelled: nextCancelled,
+    hasNext: Boolean(nextHref),
+  });
+
   const finding = err
     ? null
     : !src
@@ -914,6 +950,7 @@ export default function Player({
           end > 1
         ) {
           native.current = true;
+          setClockDuration(duration);
           const want = resume.current;
           if (want > 1 && Math.abs(media.currentTime - want) > 0.4) media.currentTime = want;
           if (startAtRef.current !== 0) setStartAt(0);
@@ -951,7 +988,8 @@ export default function Player({
       onEnded={() => {
         /* A failed live remux ends its media element too. Never turn a zero-byte
            ffmpeg exit into "episode finished" and silently jump to the next one. */
-        if (nextHref && playedFor.current >= 30) router.push(nextHref);
+        setEnded(true);
+        if (nextHref && playedFor.current >= 30 && !nextCancelled) router.push(nextHref);
       }}
     >
       <MediaProvider />
@@ -983,6 +1021,22 @@ export default function Player({
         </div>
       )}
 
+      {countdown != null && nextHref && (
+        <div className="player-nextup">
+          <div className="player-nextup-card">
+            <span className="mono">Up next · {countdown}</span>
+            <b>{nextLabel ?? "Next episode"}</b>
+            <div className="acts">
+              <a className="btn primary" href={nextHref}>
+                Play now
+              </a>
+              <button type="button" className="btn" onClick={() => setNextCancelled(true)}>
+                Watch credits
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Controls.Root className="player-controls" hideDelay={2800}>
         <Controls.Group className="reader-bar player-top">
@@ -995,7 +1049,8 @@ export default function Player({
           <div className="player-scrub-row">
             <RemuxTimeline
               position={position}
-              duration={durationSeconds}
+              duration={clockDuration}
+              buffered={bufferedPct}
               onSeek={seekTo}
             />
           </div>

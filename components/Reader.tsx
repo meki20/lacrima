@@ -77,6 +77,7 @@ export default function Reader({
           index: page,
           chapterId: progress.chapterId,
           chapterName: progress.chapterName,
+          ...(progress.pages && progress.pages > 0 ? { pages: progress.pages } : {}),
         },
       });
     }, 700);

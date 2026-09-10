@@ -95,14 +95,11 @@ export default function EpisodeList({
                 ) : null}
               </span>
               <div className="row-body">
-                <h3>{c.name}</h3>
-                {here && (tag || c.overview) ? (
-                  <p className="row-meta">
-                    {tag}
-                    {tag && c.overview ? " · " : null}
-                    {c.overview}
-                  </p>
-                ) : null}
+                <h3>
+                  <span className="mono">{tag ? `${tag} · E${c.number}` : `E${c.number}`}</span>
+                  {c.name}
+                </h3>
+                {here && c.overview ? <p className="row-meta">{c.overview}</p> : null}
               </div>
               {here && <span className="badge">watching</span>}
             </a>

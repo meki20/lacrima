@@ -11,6 +11,9 @@ export type ProgressWrite = {
   unit: number;
   chapterId: string | number;
   chapterName: string;
+  season?: number | null;
+  durationSeconds?: number | null;
+  pages?: number | null;
 };
 
 /** Fire-and-forget: must never block navigation or a page turn. */

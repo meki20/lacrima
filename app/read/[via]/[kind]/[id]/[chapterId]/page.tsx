@@ -4,6 +4,7 @@ import Reader from "@/components/Reader";
 import { getBinding } from "@/lib/match";
 import type { MediaKind, ProviderSlug } from "@/lib/media";
 import { fetchTitle } from "@/lib/metadata";
+import { titleBackHref } from "@/lib/nav";
 import { currentProfile } from "@/lib/profile";
 import type { ProgressWrite } from "@/lib/progress-write";
 import { getProgress, parseAnchor } from "@/lib/progress";
@@ -11,6 +12,7 @@ import { loadPlaylist } from "@/lib/play-cache";
 import { chaptersFor } from "@/lib/resolve";
 import { backend } from "@/lib/sources";
 import { resolveStreams } from "@/lib/sources/stremio";
+import { fetchSeries } from "@/lib/series";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +50,7 @@ export default async function Read({
   const kind = p.kind as MediaKind;
   const mediaId = Number(p.id);
   const chapterId = decodeURIComponent(p.chapterId);
-  const back = `/title/${via}/${kind}/${mediaId}`;
+  let back = `/title/${via}/${kind}/${mediaId}`;
   const src = backend(kind);
 
   const binding = getBinding(via, mediaId, kind);
@@ -72,12 +74,15 @@ export default async function Read({
       .catch(() => undefined);
   }
 
-  const [media, list, pages, me] = await Promise.all([
+  const [media, list, pages, me, seriesR] = await Promise.all([
     fetchTitle(via, kind, mediaId),
     chaptersFor(binding),
     kind === "anime" ? null : src.pages(chapterId, { via, mediaId }),
     currentProfile(),
+    fetchSeries(via, kind, mediaId),
   ]);
+
+  back = titleBackHref(via, kind, mediaId, seriesR.ok ? seriesR.value : null);
 
   if (!media.ok) return <Dead back={back} reason={media.reason} />;
   const m = media.value;
@@ -120,6 +125,9 @@ export default async function Read({
     chapterName:
       here?.name ??
       (kind === "anime" ? `Episode ${here?.number ?? ""}` : `Chapter ${chapterId}`),
+    season: here?.season,
+    durationSeconds: m.unitMinutes ? m.unitMinutes * 60 : null,
+    pages: pages?.ok ? pages.value.length : null,
   };
 
   if (kind === "anime") {
@@ -135,6 +143,11 @@ export default async function Read({
         episodeLabel={chapterLabel}
         backHref={back}
         nextHref={at >= 0 ? hop(at + 1) : null}
+        nextLabel={
+          upNext
+            ? `${upNext.season && upNext.season > 0 ? `S${upNext.season} · ` : ""}E${upNext.number} · ${upNext.name}`
+            : null
+        }
         playUrl={playFor(chapterId)}
         warmUrl={upNext ? playFor(upNext.id) : null}
         initialTime={initialTime}

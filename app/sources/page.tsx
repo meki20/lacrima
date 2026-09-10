@@ -110,7 +110,7 @@ export default async function Sources({
 
   return (
     <>
-      <TopBar active="Yours" />
+      <TopBar active="" />
       <main style={{ maxWidth: 820 }} suppressHydrationWarning>
         <div className="filters">
           {KINDS.map((k) => (

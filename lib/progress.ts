@@ -66,7 +66,95 @@ export function setProgress(p: {
     );
 }
 
-export type ContinueItem = Media & { pip: string; href: string };
+export type ContinueItem = Media & {
+  pip: string;
+  href: string;
+  detail: string;
+  ratio: number | null;
+};
+
+export function unitPip(kind: MediaKind, unit: number, season?: number | null): string {
+  if (kind === "anime") {
+    return season != null && season > 0 ? `S${season}·E${unit}` : `Ep. ${unit}`;
+  }
+  return `Ch. ${unit}`;
+}
+
+export function continueDetail(kind: MediaKind, anchor: Anchor | null): string {
+  if (!anchor) return "";
+  if (anchor.kind === "seconds") {
+    const duration = anchor.duration;
+    if (duration && duration > anchor.at) {
+      const min = Math.max(1, Math.round((duration - anchor.at) / 60));
+      return `${min} min left`;
+    }
+    return "";
+  }
+  if (anchor.kind === "page") {
+    if (anchor.pages && anchor.pages > 0) return `page ${anchor.index + 1} of ${anchor.pages}`;
+    return `page ${anchor.index + 1}`;
+  }
+  return "";
+}
+
+export function continueRatio(anchor: Anchor | null): number | null {
+  if (!anchor) return null;
+  if (anchor.kind === "seconds") {
+    if (!anchor.duration || anchor.duration <= 0) return null;
+    return Math.min(1, Math.max(0, anchor.at / anchor.duration));
+  }
+  if (anchor.kind === "page") {
+    if (!anchor.pages || anchor.pages <= 0) return null;
+    return Math.min(1, Math.max(0, (anchor.index + 1) / anchor.pages));
+  }
+  return null;
+}
+
+export function toContinueItem(r: ProgressRow): ContinueItem {
+  const anchor = parseAnchor(r.anchor);
+  const name = seriesTitle(r.title ?? "Untitled");
+  const base = `/${r.via}/${r.media_type}/${r.media_id}`;
+  const season = anchor?.kind === "seconds" ? anchor.season : undefined;
+  return {
+    id: r.media_id,
+    via: r.via,
+    kind: r.media_type,
+    title: name,
+    cover: r.cover,
+    banner: null,
+    color: null,
+    description: null,
+    genres: [],
+    units: null,
+    unitLabel: r.media_type === "anime" ? "episodes" : "chapters",
+    score: null,
+    pip: unitPip(r.media_type, r.unit, season),
+    detail: continueDetail(r.media_type, anchor),
+    ratio: continueRatio(anchor),
+    href:
+      anchor?.kind === "page" || anchor?.kind === "seconds"
+        ? `/read${base}/${encodeURIComponent(String(anchor.chapterId))}`
+        : `/title${base}`,
+  };
+}
+
+/**
+ * Collapse franchise duplicates (Season 2 progress vs the root) to one tile,
+ * keeping the most recently updated row.
+ */
+export function pickContinue(rows: ProgressRow[], limit: number): ContinueItem[] {
+  const seen = new Set<string>();
+  const out: ContinueItem[] = [];
+  for (const r of rows) {
+    const name = seriesTitle(r.title ?? "Untitled");
+    const k = `${r.via}|${r.media_type}|${name.toLowerCase()}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(toContinueItem(r));
+    if (out.length >= limit) break;
+  }
+  return out;
+}
 
 /**
  * Home's Continue rail. Reads only local rows — a metadata outage must never
@@ -78,36 +166,5 @@ export function continueReading(profileId: number, limit = 14): ContinueItem[] {
       "select * from progress where profile_id = ? order by updated_at desc limit ?",
     )
     .all(profileId, limit * 3) as ProgressRow[];
-
-  const seen = new Set<string>();
-  const out: ContinueItem[] = [];
-  for (const r of rows) {
-    const name = seriesTitle(r.title ?? "Untitled");
-    const k = `${r.via}|${r.media_type}|${name.toLowerCase()}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    const anchor = parseAnchor(r.anchor);
-    const base = `/${r.via}/${r.media_type}/${r.media_id}`;
-    out.push({
-      id: r.media_id,
-      via: r.via,
-      kind: r.media_type,
-      title: name,
-      cover: r.cover,
-      banner: null,
-      color: null,
-      description: null,
-      genres: [],
-      units: null,
-      unitLabel: r.media_type === "anime" ? "episodes" : "chapters",
-      score: null,
-      pip: r.media_type === "anime" ? `Ep. ${r.unit}` : `Ch. ${r.unit}`,
-      href:
-        anchor?.kind === "page" || anchor?.kind === "seconds"
-          ? `/read${base}/${encodeURIComponent(String(anchor.chapterId))}`
-          : `/title${base}`,
-    });
-    if (out.length >= limit) break;
-  }
-  return out;
+  return pickContinue(rows, limit);
 }

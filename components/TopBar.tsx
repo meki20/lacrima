@@ -63,7 +63,7 @@ function Tabs({ active, className }: { active: string; className: string }) {
   return (
     <nav className={className}>
       {TABS.map(([label, href, d]) => (
-        <Link key={label} href={href} className={`tab${label === active ? " on" : ""}`}>
+        <Link key={label} href={href} className={`tab${label === active ? " on" : ""}`} aria-current={label === active ? "page" : undefined}>
           <Icon d={d} />
           {label}
         </Link>

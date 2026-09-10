@@ -1,6 +1,6 @@
 import TopBar from "@/components/TopBar";
 import Rail from "@/components/Rail";
-import { Degraded, Failed, Poster } from "@/components/ui";
+import { Degraded, Failed } from "@/components/ui";
 import { fetchHome } from "@/lib/metadata";
 import { currentProfile, topGenre } from "@/lib/profile";
 import { continueReading, type ContinueItem } from "@/lib/progress";
@@ -86,9 +86,23 @@ function Continue({ items }: { items: ContinueItem[] }) {
       <div className="row-h">
         <h2>Continue</h2>
       </div>
-      <div className="shelf">
+      <div className="cont">
         {items.map((m) => (
-          <Poster key={`${m.kind}-${m.id}`} media={m} />
+          <a className="cont-card" key={`${m.kind}-${m.id}`} href={m.href}>
+            <div className="cont-art" style={{ background: m.color ?? "var(--s2)" }}>
+              {m.cover ? <img src={m.cover} alt="" loading="lazy" decoding="async" /> : null}
+            </div>
+            <div className="cont-b">
+              <div className="cont-top">
+                <h3>{m.title}</h3>
+                <span className="mono">{m.pip}</span>
+              </div>
+              {m.detail ? <div className="cont-detail">{m.detail}</div> : <div className="cont-detail">&nbsp;</div>}
+              <div className="progress" aria-hidden="true">
+                <i style={{ width: `${Math.round((m.ratio ?? 0) * 100)}%` }} />
+              </div>
+            </div>
+          </a>
         ))}
       </div>
     </section>

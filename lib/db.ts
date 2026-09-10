@@ -226,9 +226,23 @@ export const plainAll = <T extends object>(rows: T[]): T[] => rows.map(plain);
 
 /** Data rule 3 (CLAUDE.md): anchors are portable across devices. */
 export type Anchor =
-  | { kind: "seconds"; at: number; chapterId: string; chapterName: string }
+  | {
+      kind: "seconds";
+      at: number;
+      chapterId: string;
+      chapterName: string;
+      /** Episode length when known, so Continue can show time left. */
+      duration?: number;
+      season?: number;
+    }
   /** `chapterId` is the source's, shared by every device pointing at this server. */
-  | { kind: "page"; index: number; chapterId: number | string; chapterName: string }
+  | {
+      kind: "page";
+      index: number;
+      chapterId: number | string;
+      chapterName: string;
+      pages?: number;
+    }
   | { kind: "paragraph"; cfi: string };
 
 function seed(d: DatabaseSync) {
