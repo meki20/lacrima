@@ -148,6 +148,14 @@ export default async function Read({
             ? `${upNext.season && upNext.season > 0 ? `S${upNext.season} · ` : ""}E${upNext.number} · ${upNext.name}`
             : null
         }
+        episodes={chapters.map((c) => ({
+          id: c.id,
+          number: c.number,
+          name: c.name,
+          season: c.season ?? null,
+          href: `/read/${via}/${kind}/${mediaId}/${encodeURIComponent(c.id)}`,
+        }))}
+        currentId={chapterId}
         playUrl={playFor(chapterId)}
         warmUrl={upNext ? playFor(upNext.id) : null}
         initialTime={initialTime}

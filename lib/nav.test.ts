@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { firstPlay, navTabForKind, playHref, playLabel, titleBackHref } from "./nav.ts";
+import { firstPlay, navTabForKind, playHref, playLabel, titleBackHref, dockSeasons } from "./nav.ts";
 
 test("navTabForKind follows browse tabs, never Yours", () => {
   assert.equal(navTabForKind("anime"), "Anime");
@@ -53,4 +53,25 @@ test("playHref encodes source ids; playLabel is sentence case", () => {
   assert.equal(playHref("kitsu", "anime", 7, "tt:1:2"), "/read/kitsu/anime/7/tt%3A1%3A2");
   assert.equal(playLabel("anime", 1), "Play episode 1");
   assert.equal(playLabel("manga", 12), "Read chapter 12");
+});
+
+test("dockSeasons groups a franchise, specials last, and a flat list as one season", () => {
+  const href = (id: string) => `/read/kitsu/anime/1/${id}`;
+  const grouped = dockSeasons([
+    { id: "s2e1", number: 1, name: "S2 start", season: 2, href: href("s2e1") },
+    { id: "sp", number: 1, name: "OVA", season: 0, href: href("sp") },
+    { id: "s1e1", number: 1, name: "S1 start", season: 1, href: href("s1e1") },
+    { id: "s1e2", number: 2, name: "S1 next", season: 1, href: href("s1e2") },
+  ]);
+  assert.deepEqual(
+    grouped.map((g) => `${g.label}:${g.items.map((i) => i.id).join(",")}`),
+    ["Season 1:s1e1,s1e2", "Season 2:s2e1", "Specials:sp"],
+  );
+  const flat = dockSeasons([
+    { id: "e1", number: 1, name: "A", season: null, href: href("e1") },
+    { id: "e2", number: 2, name: "B", season: null, href: href("e2") },
+  ]);
+  assert.equal(flat.length, 1);
+  assert.equal(flat[0].label, "Season 1");
+  assert.equal(flat[0].items.length, 2);
 });

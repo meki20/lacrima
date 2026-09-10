@@ -717,6 +717,23 @@ input.search::placeholder { color: var(--tx3); }
 }
 .player-lang-menu ul button:hover { background: rgba(255,255,255,.08); }
 .player-lang-menu ul button.on { color: var(--accent); background: var(--accent-dim); }
+.player-ep-menu { min-width: 280px; max-width: min(360px, 80vw); }
+.player-ep-menu ul { max-height: min(320px, 46vh); }
+.player-ep-season {
+  padding: 8px 12px 4px;
+  font-size: 11px; font-weight: 500; color: var(--tx3);
+  letter-spacing: 0.04em; text-transform: lowercase;
+}
+.player-ep-menu ul a {
+  display: flex; align-items: center; gap: 8px;
+  height: 40px; padding: 0 12px;
+  border-radius: var(--r-ctl); color: var(--tx);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 14px;
+}
+.player-ep-menu ul a .mono { color: var(--tx3); flex-shrink: 0; }
+.player-ep-menu ul a:hover { background: rgba(255,255,255,.08); }
+.player-ep-menu ul a.on { color: var(--accent); background: var(--accent-dim); }
 .player-lang-note {
   padding: 10px 12px;
   color: var(--tx3); font-size: 13px; line-height: 1.35;

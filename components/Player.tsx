@@ -29,6 +29,7 @@ import {
 import { pushProgress, type ProgressWrite } from "@/lib/progress-write";
 import { withCacheParams } from "@/lib/play-cache-client";
 import { nextUpCountdown, toggleSubChoice } from "@/lib/nextup";
+import { dockSeasons, type DockEpisode } from "@/lib/nav";
 import {
   bufferedEnd,
   fmtClock,
@@ -93,6 +94,7 @@ const PATH = {
   back10: "M12 6V3L7 7l5 4V8a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z",
   fwd10: "M12 6V3l5 4-5 4V8a5 5 0 1 0 5 5h2a7 7 0 1 1-7-7z",
   next: "M6 5.5v13l9-6.5zM16.5 5.5H19v13h-2.5z",
+  list: "M4 7h16M4 12h16M4 17h16",
   vol: "M4 9.5h3L11 6v12L7 14.5H4zm10.5-1a4.5 4.5 0 0 1 0 7",
   mute: "M4 9.5h3L11 6v12L7 14.5H4zm11 0 4 5m0-5-4 5",
   full: "M4 9V4h5M20 9V4h-5M4 15v5h5m11-5v5h-5",
@@ -221,6 +223,8 @@ export default function Player({
   backHref,
   nextHref,
   nextLabel,
+  episodes = [],
+  currentId,
   playUrl,
   warmUrl,
   initialTime,
@@ -232,6 +236,8 @@ export default function Player({
   backHref: string;
   nextHref: string | null;
   nextLabel?: string | null;
+  episodes?: DockEpisode[];
+  currentId?: string;
   playUrl: string;
   warmUrl?: string | null;
   initialTime: number;
@@ -267,6 +273,7 @@ export default function Player({
   );
   /** Cached fast-path only returns one pick; bust it when that pick won't start. */
   const [bustCache, setBustCache] = useState(false);
+  const [retryAt, setRetryAt] = useState(0);
   const [sourceProvider, setSourceProvider] = useState<string | null>(null);
   const [revealKey, setRevealKey] = useState<string | null>(null);
   const [fromCache, setFromCache] = useState(false);
@@ -416,7 +423,7 @@ export default function Player({
     return () => {
       live = false;
     };
-  }, [playUrl, bustCache, lang]);
+  }, [playUrl, bustCache, lang, retryAt]);
 
   useEffect(() => {
     let live = true;
@@ -1000,7 +1007,23 @@ export default function Player({
         <div className="player-stage">
           <div className="empty" style={{ maxWidth: 460 }}>
             <b>Can&apos;t play this</b>
-            {err} Try another episode, or pick a different source on the title page.
+            {err} Try another quality or language, another episode, or a different source on the title page.
+            <div className="acts" style={{ marginTop: 14 }}>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => {
+                  setErr(null);
+                  setHttpAt(0);
+                  setTorrentBatch(0);
+                  setRaceTry(0);
+                  setBustCache(true);
+                  setRetryAt((n) => n + 1);
+                }}
+              >
+                Try again
+              </button>
+            </div>
           </div>
         </div>
       ) : (
@@ -1122,6 +1145,9 @@ export default function Player({
                     localStorage.setItem(syncKey, String(next));
                   }}
                 />
+              )}
+              {episodes.length > 1 && (
+                <EpisodeDock episodes={episodes} currentId={currentId} />
               )}
               {nextHref && (
                 <a className="pbtn" href={nextHref} aria-label="Next episode">
@@ -1305,6 +1331,57 @@ function DockMenu({
             </div>
             </>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EpisodeDock({ episodes, currentId }: { episodes: DockEpisode[]; currentId?: string }) {
+  const [open, setOpen] = useState(false);
+  const seasons = dockSeasons(episodes);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+  return (
+    <div
+      className="player-lang"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      <IconBtn
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Episodes"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Icon d={PATH.list} filled={false} />
+      </IconBtn>
+      {open && (
+        <div className="player-lang-menu player-ep-menu">
+          {seasons.map((s) => (
+            <div key={s.season}>
+              {seasons.length > 1 ? <div className="player-ep-season">{s.label}</div> : null}
+              <ul role="listbox" aria-label={s.label}>
+                {s.items.map((ep) => (
+                  <li key={ep.id} role="option" aria-selected={ep.id === currentId}>
+                    <a className={ep.id === currentId ? "on" : undefined} href={ep.href}>
+                      <span className="mono">E{ep.number}</span>
+                      {ep.name}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
       )}
     </div>

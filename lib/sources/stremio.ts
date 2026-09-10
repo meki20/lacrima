@@ -1039,13 +1039,16 @@ async function collectSubtitles(
  */
 export async function resolveSubtitles(
   chapterId: string,
-  extras?: { via?: string; mediaId?: number },
+  extras?: { via?: string; mediaId?: number; fresh?: boolean },
 ): Promise<Result<SubCue[]>> {
   const ctx: CacheCtx | null =
     extras?.via && extras.mediaId != null && Number.isFinite(extras.mediaId)
       ? { via: extras.via as CacheCtx["via"], mediaId: extras.mediaId, chapterId }
       : null;
-  if (ctx) {
+  const key = `sub|${chapterId}|${extras?.via ?? ""}|${extras?.mediaId ?? ""}`;
+  if (extras?.fresh) {
+    subtitles.delete(key);
+  } else if (ctx) {
     const disk = loadSubIndex(ctx);
     if (disk.length) {
       void ensureSubFiles(ctx, disk);
@@ -1054,8 +1057,7 @@ export async function resolveSubtitles(
   }
 
   const [, id] = split(chapterId);
-  const key = `sub|${chapterId}|${extras?.via ?? ""}|${extras?.mediaId ?? ""}`;
-  const hit = cachedSubs(key);
+  const hit = extras?.fresh ? null : cachedSubs(key);
   if (hit) return Ok(hit);
 
   let run = subInflight.get(key);

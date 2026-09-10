@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { loadSubBody, loadSubIndex, saveSubIndex, subBodyPath } from "./sub-cache.ts";
+import { mediaDir } from "./play-cache.ts";
 
 async function scratch(fn: () => void | Promise<void>) {
   const root = mkdtempSync(join(tmpdir(), "lacrima-subs-"));
@@ -50,5 +51,29 @@ test("a saved body is reused and not overwritten", async () => {
     const second = await loadSubBody(ctx, cue.url);
     assert.equal(new TextDecoder().decode(second!), "kept");
     assert.equal(existsSync(dest), true);
+  });
+});
+
+test("a just-written index is reused; an aged one is fetched again", async () => {
+  await scratch(() => {
+    saveSubIndex(ctx, [cue]);
+    assert.equal(loadSubIndex(ctx).length, 1);
+    const file = join(mediaDir(ctx), "subs", "index.json");
+    writeFileSync(file, JSON.stringify({ at: Date.now() - 10_000, cues: [cue] }));
+    assert.deepEqual(loadSubIndex(ctx, 1_000), []);
+    assert.equal(loadSubIndex(ctx, 60_000).length, 1);
+  });
+});
+
+test("legacy array indexes are stale so a bad first fetch does not stick forever", async () => {
+  await scratch(() => {
+    saveSubIndex(ctx, [cue]);
+    const file = join(mediaDir(ctx), "subs", "index.json");
+    writeFileSync(file, JSON.stringify([cue]));
+    assert.deepEqual(loadSubIndex(ctx), []);
+    writeFileSync(file, JSON.stringify({ at: Date.now() - 48 * 60 * 60 * 1000, cues: [cue] }));
+    assert.deepEqual(loadSubIndex(ctx), []);
+    writeFileSync(file, JSON.stringify({ at: Date.now(), cues: [cue] }));
+    assert.equal(loadSubIndex(ctx)[0]?.url, cue.url);
   });
 });

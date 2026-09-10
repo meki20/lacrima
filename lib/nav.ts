@@ -46,3 +46,28 @@ export function playHref(via: string, kind: string, id: number, chapterId: strin
 export function playLabel(kind: string, number: number): string {
   return kind === "anime" ? `Play episode ${number}` : `Read chapter ${number}`;
 }
+
+export type DockEpisode = {
+  id: string;
+  number: number;
+  name: string;
+  season: number | null;
+  href: string;
+};
+
+export function dockSeasons(episodes: DockEpisode[]): { season: number; label: string; items: DockEpisode[] }[] {
+  const map = new Map<number, DockEpisode[]>();
+  for (const e of episodes) {
+    const season = e.season == null ? 1 : e.season > 0 ? e.season : 0;
+    const list = map.get(season) ?? [];
+    list.push(e);
+    map.set(season, list);
+  }
+  return [...map.entries()]
+    .sort((a, b) => (a[0] || 1000) - (b[0] || 1000))
+    .map(([season, items]) => ({
+      season,
+      label: season > 0 ? `Season ${season}` : "Specials",
+      items,
+    }));
+}

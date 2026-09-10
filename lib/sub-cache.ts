@@ -21,6 +21,8 @@ export function subBodyPath(ctx: CacheCtx, url: string): string {
   return join(subsDir(ctx), `${id}.${cueType(url)}`);
 }
 
+export const SUB_INDEX_TTL_MS = 24 * 60 * 60 * 1000;
+
 function thaw(ctx: CacheCtx, row: SubCue): SubCue {
   return {
     id: row.id,
@@ -32,13 +34,24 @@ function thaw(ctx: CacheCtx, row: SubCue): SubCue {
   };
 }
 
-export function loadSubIndex(ctx: CacheCtx): SubCue[] {
+export function loadSubIndex(ctx: CacheCtx, maxAge = SUB_INDEX_TTL_MS): SubCue[] {
   try {
-    const rows = JSON.parse(readFileSync(indexPath(ctx), "utf8")) as SubCue[];
-    return Array.isArray(rows) ? rows.filter((r) => r?.url).map((r) => thaw(ctx, r)) : [];
+    const raw = JSON.parse(readFileSync(indexPath(ctx), "utf8")) as unknown;
+    const { at, rows } = readIndex(raw);
+    if (maxAge >= 0 && Date.now() - at > maxAge) return [];
+    return rows.filter((r) => r?.url).map((r) => thaw(ctx, r));
   } catch {
     return [];
   }
+}
+
+function readIndex(raw: unknown): { at: number; rows: SubCue[] } {
+  if (Array.isArray(raw)) return { at: 0, rows: raw as SubCue[] };
+  if (raw && typeof raw === "object" && Array.isArray((raw as { cues?: unknown }).cues)) {
+    const file = raw as { at?: unknown; cues: SubCue[] };
+    return { at: typeof file.at === "number" ? file.at : 0, rows: file.cues };
+  }
+  return { at: 0, rows: [] };
 }
 
 export function saveSubIndex(ctx: CacheCtx, cues: SubCue[]): void {
@@ -48,9 +61,10 @@ export function saveSubIndex(ctx: CacheCtx, cues: SubCue[]): void {
     mkdirSync(subsDir(ctx), { recursive: true });
     writeFileSync(
       indexPath(ctx),
-      JSON.stringify(
-        cues.map((c) => ({ id: c.id, lang: c.lang, label: c.label, url: c.url, type: c.type })),
-      ),
+      JSON.stringify({
+        at: Date.now(),
+        cues: cues.map((c) => ({ id: c.id, lang: c.lang, label: c.label, url: c.url, type: c.type })),
+      }),
     );
   } catch {
     /* a cache write must never fail a play */

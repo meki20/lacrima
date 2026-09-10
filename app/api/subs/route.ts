@@ -15,6 +15,7 @@ export async function GET(req: Request) {
   const r = await resolveSubtitles(chapterId, {
     via: via as ProviderSlug | undefined,
     mediaId: Number.isFinite(mediaId) ? mediaId : undefined,
+    fresh: u.searchParams.get("fresh") === "1",
   });
   if (!r.ok) return Response.json({ error: r.reason }, { status: 502 });
   return Response.json({ cues: r.value });

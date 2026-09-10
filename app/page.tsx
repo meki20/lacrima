@@ -58,7 +58,6 @@ export default async function Home() {
             <a className="btn primary" href={`/title/${hero.via}/${hero.kind}/${hero.id}`}>
               Details
             </a>
-            <button className="btn">+ My list</button>
           </div>
         </div>
       )}
