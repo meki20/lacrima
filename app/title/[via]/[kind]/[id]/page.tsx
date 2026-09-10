@@ -4,9 +4,10 @@ import MatchList from "@/components/MatchList";
 import TitleChapters from "@/components/TitleChapters";
 import TopBar from "@/components/TopBar";
 import WatchCta from "@/components/WatchCta";
+import WeakMatchNote from "@/components/WeakMatchNote";
 import { Failed } from "@/components/ui";
 import type { MediaKind, ProviderSlug } from "@/lib/media";
-import { searchTitles } from "@/lib/match";
+import { searchTitles, weakDismissKey } from "@/lib/match";
 import { fetchTitle } from "@/lib/metadata";
 import { navTabForKind } from "@/lib/nav";
 import { currentProfile } from "@/lib/profile";
@@ -230,17 +231,13 @@ export default async function Title({
             )}
 
             {binding && resolution.tier === "weak" && (
-              <div className="note">
-                <span className="dot" style={{ background: "var(--warn)" }} />
-                Matched to <b>&nbsp;{binding.source_title}&nbsp;</b> — only{" "}
-                {Math.round(binding.confidence * 100)}% confident.
-                <a
-                  href={change ? returnTo : `${returnTo}${returnTo.includes("?") ? "&" : "?"}change=1#alternatives`}
-                  style={{ marginLeft: "auto", color: "var(--accent)" }}
-                >
-                  {change ? "Never mind" : "Pick another"}
-                </a>
-              </div>
+              <WeakMatchNote
+                storeKey={weakDismissKey(selected.via, selected.kind, selected.id)}
+                sourceTitle={binding.source_title}
+                confidence={binding.confidence}
+                href={change ? returnTo : `${returnTo}${returnTo.includes("?") ? "&" : "?"}change=1#alternatives`}
+                change={change}
+              />
             )}
 
             {resolution.tier === "none" && (

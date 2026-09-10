@@ -5,6 +5,7 @@ import {
   clampBuffered,
   fmtClock,
   fmtRemaining,
+  jumpPercent,
   planSeek,
   scrubPercents,
   type TimeRangesLike,
@@ -112,4 +113,14 @@ test("fmtClock and fmtRemaining match player chrome", () => {
   assert.equal(fmtRemaining(90, 90), "−0:00");
   assert.equal(bufferedEnd(ranges([[0, 12], [40, 90]])), 90);
   assert.equal(bufferedEnd(ranges([])), null);
+});
+
+test("jumpPercent maps 0–9 onto the episode, and ignores junk", () => {
+  assert.equal(jumpPercent(1440, "0"), 0);
+  assert.equal(jumpPercent(1440, "5"), 720);
+  assert.equal(jumpPercent(1440, "9"), 1296);
+  assert.equal(jumpPercent(null, "5"), null);
+  assert.equal(jumpPercent(0, "5"), null);
+  assert.equal(jumpPercent(1440, "a"), null);
+  assert.equal(jumpPercent(1440, "10"), null);
 });

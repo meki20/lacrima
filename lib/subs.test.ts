@@ -11,6 +11,8 @@ import {
   parseSubSync,
   pickSubLang,
   remuxEpisodeTime,
+  parseCaptionScale,
+  captionScaleLabel,
   subSyncKey,
   toCue,
   type SubCue,
@@ -105,4 +107,13 @@ test("parseCues reads VTT, SRT and ASS on episode time", () => {
   assert.equal(cueAt(vtt, 179.9), null);
   assert.equal(cueAt(vtt, 180)?.text, "Hello");
   assert.equal(cueAt(vtt, 182.5), null);
+});
+
+test("caption scale only accepts the three sizes", () => {
+  assert.equal(parseCaptionScale(null), 1);
+  assert.equal(parseCaptionScale("1.2"), 1.2);
+  assert.equal(parseCaptionScale("1.45"), 1.45);
+  assert.equal(parseCaptionScale("2"), 1);
+  assert.equal(captionScaleLabel(1.45), "Large");
+  assert.equal(captionScaleLabel(1), "Small");
 });

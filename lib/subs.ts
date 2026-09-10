@@ -183,6 +183,20 @@ export function dedupeCues(cues: SubCue[]): SubCue[] {
   return out;
 }
 
+export const CAPTION_SCALES = [1, 1.2, 1.45] as const;
+
+export function parseCaptionScale(raw: string | null | undefined): number {
+  const n = Number(raw);
+  if (n === 1.2 || n === 1.45) return n;
+  return 1;
+}
+
+export function captionScaleLabel(scale: number): string {
+  if (scale === 1.45) return "Large";
+  if (scale === 1.2) return "Medium";
+  return "Small";
+}
+
 export const SUB_SYNC_RANGE = 10;
 export const SUB_SYNC_STEP = 0.25;
 

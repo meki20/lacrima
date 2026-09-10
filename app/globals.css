@@ -234,6 +234,13 @@ input:focus-visible { outline: none; border-color: var(--highlight); }
   background: var(--s1); border: 1px solid var(--border);
   border-left: 2px solid var(--warn); border-radius: 0 var(--r-ctl) var(--r-ctl) 0;
 }
+.note-dismiss {
+  margin-left: 4px; padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: transparent; color: var(--tx3);
+  font: inherit; font-size: 11px; cursor: pointer;
+}
+.note-dismiss:hover { color: var(--tx); }
 
 .empty {
   border: 1px solid var(--border); border-radius: var(--r-card);
@@ -795,7 +802,7 @@ input.search::placeholder { color: var(--tx3); }
 .player-captions {
   position: absolute; left: 10%; right: 10%; bottom: 88px; z-index: 2;
   pointer-events: none; text-align: center;
-  font-size: clamp(16px, 2.4vw, 28px); font-weight: 500; line-height: 1.35;
+  font-size: calc(clamp(16px, 2.4vw, 28px) * var(--caption-scale, 1)); font-weight: 500; line-height: 1.35;
   color: #fff; white-space: pre-line;
   text-shadow: 0 1px 2px #000, 0 0 10px rgba(0,0,0,.75);
 }

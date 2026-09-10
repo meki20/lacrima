@@ -71,6 +71,11 @@ export function fmtRemaining(duration: number, position: number): string {
   return `−${fmtClock(Math.max(0, duration - position))}`;
 }
 
+export function jumpPercent(duration: number | null, key: string): number | null {
+  if (duration == null || !(duration > 0) || !/^[0-9]$/.test(key)) return null;
+  return duration * (Number(key) / 10);
+}
+
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0;
   return Math.min(1, Math.max(0, n));

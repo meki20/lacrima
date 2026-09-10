@@ -22,6 +22,9 @@ import {
   SUB_SYNC_RANGE,
   SUB_SYNC_STEP,
   subSyncKey,
+  parseCaptionScale,
+  captionScaleLabel,
+  CAPTION_SCALES,
   type SubChoice,
   type SubCue,
   type TimedCue,
@@ -34,6 +37,7 @@ import {
   bufferedEnd,
   fmtClock,
   fmtRemaining,
+  jumpPercent,
   planSeek,
   scrubPercents,
 } from "@/lib/seek";
@@ -132,11 +136,11 @@ function IconBtn({ className, ...props }: ComponentProps<"button">) {
   return <button type="button" className={`pbtn${className ? ` ${className}` : ""}`} {...props} />;
 }
 
-function SubOverlay({ cues, at }: { cues: TimedCue[]; at: number }) {
+function SubOverlay({ cues, at, scale }: { cues: TimedCue[]; at: number; scale: number }) {
   const cue = cueAt(cues, at);
   if (!cue) return null;
   return (
-    <div className="player-captions" aria-live="off">
+    <div className="player-captions" style={{ "--caption-scale": scale } as CSSProperties} aria-live="off">
       {cue.text}
     </div>
   );
@@ -290,6 +294,9 @@ export default function Player({
     typeof window === "undefined"
       ? "off"
       : (parseSubChoice(localStorage.getItem("lacrima-subs")) ?? "off"),
+  );
+  const [captionScale, setCaptionScale] = useState(() =>
+    typeof window === "undefined" ? 1 : parseCaptionScale(localStorage.getItem("lacrima-caption-scale")),
   );
   /* MediaSource exists only in the browser. Wait one mount so SSR and the
      first client paint agree, then take the remux ourselves instead of
@@ -825,11 +832,17 @@ export default function Player({
           localStorage.setItem("lacrima-subs", next);
           return next;
         });
+      } else {
+        const jump = jumpPercent(clockDuration, e.key);
+        if (jump != null) {
+          e.preventDefault();
+          seekTo(jump);
+        }
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [backHref, nextHref, router, seekBy]);
+  }, [backHref, clockDuration, nextHref, router, seekBy, seekTo]);
 
   /* Only once a group is actually chosen, so this cannot flash while resolving. */
   const wrongLang = group && group.lang !== lang ? group : null;
@@ -1001,7 +1014,7 @@ export default function Player({
     >
       <MediaProvider />
       <Gesture className="player-gesture" event="pointerup" action="toggle:paused" />
-      {activeCue && <SubOverlay cues={timed} at={subAt} />}
+      {activeCue && <SubOverlay cues={timed} at={subAt} scale={captionScale} />}
 
       {err ? (
         <div className="player-stage">
@@ -1144,6 +1157,11 @@ export default function Player({
                     setSubSync(next);
                     localStorage.setItem(syncKey, String(next));
                   }}
+                  captionScale={captionScale}
+                  onCaptionScale={(n) => {
+                    setCaptionScale(n);
+                    localStorage.setItem("lacrima-caption-scale", String(n));
+                  }}
                 />
               )}
               {episodes.length > 1 && (
@@ -1182,6 +1200,8 @@ function DockMenu({
   onPickSub,
   subSync,
   onSubSync,
+  captionScale,
+  onCaptionScale,
 }: {
   value: string;
   ariaLabel: string;
@@ -1194,6 +1214,8 @@ function DockMenu({
   onPickSub: (choice: SubChoice) => void;
   subSync: number;
   onSubSync: (n: number) => void;
+  captionScale: number;
+  onCaptionScale: (n: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"language" | "subs">("language");
@@ -1327,6 +1349,26 @@ function DockMenu({
                   aria-label="Subtitle delay"
                   onChange={(e) => onSubSync(Number(e.currentTarget.value))}
                 />
+              </div>
+            </div>
+            <div className="player-sub-sync">
+              <div className="player-sub-sync-row">
+                <span>Size</span>
+                <output>{captionScaleLabel(captionScale)}</output>
+              </div>
+              <div className="player-lang-tabs" role="radiogroup" aria-label="Caption size">
+                {CAPTION_SCALES.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    role="radio"
+                    aria-checked={captionScale === n}
+                    className={captionScale === n ? "on" : undefined}
+                    onClick={() => onCaptionScale(n)}
+                  >
+                    {captionScaleLabel(n)}
+                  </button>
+                ))}
               </div>
             </div>
             </>

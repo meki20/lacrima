@@ -93,6 +93,7 @@ export default function Rail({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
     const slide = () => {
       if (held.current || sliding.current) return;
