@@ -748,6 +748,12 @@ input.search::placeholder { color: var(--tx3); }
   padding: 10px 12px;
   color: var(--tx3); font-size: 13px; line-height: 1.35;
 }
+.player-lang-note button {
+  margin-left: 4px; padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: transparent; color: var(--accent);
+  font: inherit; font-size: 11px; cursor: pointer;
+}
 .player-sub-sync {
   display: flex; flex-direction: column; gap: 2px;
   padding: 8px 4px 4px; margin-top: 2px;

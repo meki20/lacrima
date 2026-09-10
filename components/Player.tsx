@@ -292,6 +292,7 @@ export default function Player({
   const [cues, setCues] = useState<SubCue[]>([]);
   const [subErr, setSubErr] = useState<string | null>(null);
   const [subLoading, setSubLoading] = useState(true);
+  const [subFresh, setSubFresh] = useState(0);
   const [subLang, setSubLang] = useState<SubChoice>(() =>
     typeof window === "undefined"
       ? "off"
@@ -444,6 +445,7 @@ export default function Player({
       via: progress.via,
       mediaId: String(progress.mediaId),
     });
+    if (subFresh) q.set("fresh", "1");
     fetch(`/api/subs?${q}`)
       .then(async (r) => {
         const j = (await r.json()) as { cues?: SubCue[]; error?: string };
@@ -460,7 +462,7 @@ export default function Player({
     return () => {
       live = false;
     };
-  }, [progress.chapterId, progress.via, progress.mediaId]);
+  }, [progress.chapterId, progress.via, progress.mediaId, subFresh]);
 
   const group = groups.find((g) => g.id === gid) ?? groups[0];
   const { http: httpPicks, torrent: torrentPicks } = splitPicks(group?.picks ?? []);
@@ -1163,6 +1165,7 @@ export default function Player({
                     setCaptionScale(n);
                     localStorage.setItem("lacrima-caption-scale", String(n));
                   }}
+                  onRefreshSubs={() => setSubFresh((n) => n + 1)}
                 />
               )}
               {episodes.length > 1 && (
@@ -1202,6 +1205,7 @@ function DockMenu({
   onSubSync,
   captionScale,
   onCaptionScale,
+  onRefreshSubs,
 }: {
   value: string;
   groups: StreamGroup[];
@@ -1215,6 +1219,7 @@ function DockMenu({
   onSubSync: (n: number) => void;
   captionScale: number;
   onCaptionScale: (n: number) => void;
+  onRefreshSubs: () => void;
 }) {
   const selected = groups.find((g) => g.id === value) ?? groups[0];
   const qualities = qualitiesForLang(groups, selected.lang);
@@ -1325,7 +1330,12 @@ function DockMenu({
               {subLoading ? (
                 <li className="player-lang-note">Finding subtitles</li>
               ) : subError ? (
-                <li className="player-lang-note">{subError}</li>
+                <li className="player-lang-note">
+                  {subError}{" "}
+                  <button type="button" onClick={onRefreshSubs}>
+                    Find again
+                  </button>
+                </li>
               ) : (
                 <>
                   <li role="option" aria-selected={subLang === "off"}>
@@ -1355,7 +1365,12 @@ function DockMenu({
                     </li>
                   ))}
                   {!cues.length && (
-                    <li className="player-lang-note">None for this episode</li>
+                    <li className="player-lang-note">
+                      None for this episode{" "}
+                      <button type="button" onClick={onRefreshSubs}>
+                        Find again
+                      </button>
+                    </li>
                   )}
                 </>
               )}
