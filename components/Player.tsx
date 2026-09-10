@@ -52,6 +52,8 @@ import {
   TORRENT_RACE_MAX,
   torrentRaceUrl,
   withRaceTry,
+  langChoices,
+  qualitiesForLang,
   type StreamGroup,
 } from "@/lib/streams";
 import { mseSupported, useMseSrc } from "@/components/useMseSrc";
@@ -1126,8 +1128,7 @@ export default function Player({
               {groups.length > 0 && (
                 <DockMenu
                   value={gid ?? groups[0].id}
-                  ariaLabel={`Quality and language, ${group?.label ?? ""}`}
-                  items={groups.map((g) => ({ id: g.id, label: g.label }))}
+                  groups={groups}
                   onPick={(id) => {
                     const g = groups.find((x) => x.id === id);
                     setErr(null);
@@ -1190,8 +1191,7 @@ function PlayPause() {
 
 function DockMenu({
   value,
-  ariaLabel,
-  items,
+  groups,
   onPick,
   subLang,
   cues,
@@ -1204,8 +1204,7 @@ function DockMenu({
   onCaptionScale,
 }: {
   value: string;
-  ariaLabel: string;
-  items: { id: string; label: string }[];
+  groups: StreamGroup[];
   onPick: (id: string) => void;
   subLang: SubChoice;
   cues: SubCue[];
@@ -1217,9 +1216,14 @@ function DockMenu({
   captionScale: number;
   onCaptionScale: (n: number) => void;
 }) {
+  const selected = groups.find((g) => g.id === value) ?? groups[0];
+  const qualities = qualitiesForLang(groups, selected.lang);
+  const langs = langChoices(groups);
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<"language" | "subs">("language");
-  const label = items.find((x) => x.id === value)?.label ?? value;
+  const [tab, setTab] = useState<"quality" | "language" | "subs">(
+    qualities.length > 1 ? "quality" : langs.length > 1 ? "language" : "subs",
+  );
+  const ariaLabel = `Quality and language, ${selected.label}`;
 
   useEffect(() => {
     if (!open) return;
@@ -1244,20 +1248,33 @@ function DockMenu({
         aria-label={ariaLabel}
         onClick={() => setOpen((v) => !v)}
       >
-        {label}
+        {selected.label}
       </IconBtn>
       {open && (
         <div className="player-lang-menu">
-          <div className="player-lang-tabs" role="tablist" aria-label="Language and subtitles">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === "language"}
-              className={tab === "language" ? "on" : undefined}
-              onClick={() => setTab("language")}
-            >
-              Language
-            </button>
+          <div className="player-lang-tabs" role="tablist" aria-label="Quality, language and subtitles">
+            {qualities.length > 1 && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "quality"}
+                className={tab === "quality" ? "on" : undefined}
+                onClick={() => setTab("quality")}
+              >
+                Quality
+              </button>
+            )}
+            {langs.length > 1 && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "language"}
+                className={tab === "language" ? "on" : undefined}
+                onClick={() => setTab("language")}
+              >
+                Language
+              </button>
+            )}
             <button
               type="button"
               role="tab"
@@ -1268,12 +1285,29 @@ function DockMenu({
               Subs
             </button>
           </div>
-          {tab === "language" ? (
-            <ul role="listbox" aria-label={ariaLabel}>
-              {items.map((item) => (
+          {tab === "quality" ? (
+            <ul role="listbox" aria-label="Quality">
+              {qualities.map((item) => (
                 <li key={item.id} role="option" aria-selected={item.id === value}>
                   <button
                     className={item.id === value ? "on" : undefined}
+                    type="button"
+                    onClick={() => {
+                      onPick(item.id);
+                      setOpen(false);
+                    }}
+                  >
+                    {item.quality}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : tab === "language" ? (
+            <ul role="listbox" aria-label="Language">
+              {langs.map((item) => (
+                <li key={item.lang} role="option" aria-selected={item.lang === selected.lang}>
+                  <button
+                    className={item.lang === selected.lang ? "on" : undefined}
                     type="button"
                     onClick={() => {
                       onPick(item.id);

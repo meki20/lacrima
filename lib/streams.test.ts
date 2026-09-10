@@ -13,6 +13,8 @@ import {
   srcDeadlineMs,
   withRaceTry,
   TORRENT_RACE_MAX,
+  langChoices,
+  qualitiesForLang,
 } from "./streams.ts";
 
 test("a listing that describes nothing never outranks one we can read", () => {
@@ -540,4 +542,26 @@ test("exclusive Japanese outranks dual audio in the Japanese group", () => {
   const ja = groups.find((g) => g.lang === "ja")!;
   assert.equal(ja.picks[0].url, "/api/stream?ih=ja");
   assert.ok(ja.picks.some((p) => p.url === "/api/stream?ih=dual"));
+});
+
+test("langChoices and qualitiesForLang split a mixed playlist the way the dock does", () => {
+  const { groups } = present(
+    [
+      { text: "Show S01E01 1080p Japanese AAC", url: "/api/stream?ih=ja1080", provider: "A" },
+      { text: "Show S01E01 720p Japanese AAC", url: "/api/stream?ih=ja720", provider: "B" },
+      { text: "Show S01E01 1080p English Dual Audio", url: "/api/stream?ih=en1080", provider: "C" },
+    ],
+    "ja",
+  );
+  const langs = langChoices(groups);
+  assert.deepEqual(
+    langs.map((l) => l.lang),
+    ["ja", "en"],
+  );
+  assert.equal(langs[0].id, groups.find((g) => g.lang === "ja")?.id);
+  const jaQ = qualitiesForLang(groups, "ja").map((g) => g.quality);
+  const enQ = qualitiesForLang(groups, "en").map((g) => g.quality);
+  assert.ok(jaQ.includes("1080p") && jaQ.includes("720p"));
+  assert.deepEqual(enQ, ["1080p"]);
+  assert.equal(qualitiesForLang(groups, "fr").length, 0);
 });

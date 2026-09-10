@@ -177,6 +177,22 @@ export type StreamGroup = {
 
 export type Playlist = { groups: StreamGroup[]; preferred: string | null };
 
+export function qualitiesForLang(groups: StreamGroup[], lang: Lang): StreamGroup[] {
+  return groups.filter((g) => g.lang === lang);
+}
+
+/** First group per language — `present()` already sorted quality, so this is the best of that dub. */
+export function langChoices(groups: StreamGroup[]): { lang: Lang; id: string; label: string }[] {
+  const seen = new Set<Lang>();
+  const out: { lang: Lang; id: string; label: string }[] = [];
+  for (const g of groups) {
+    if (seen.has(g.lang)) continue;
+    seen.add(g.lang);
+    out.push({ lang: g.lang, id: g.id, label: LANGS.find((l) => l.id === g.lang)?.label ?? g.lang });
+  }
+  return out;
+}
+
 export type Candidate = {
   text: string;
   url: string;
