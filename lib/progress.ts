@@ -168,3 +168,16 @@ export function continueReading(profileId: number, limit = 14): ContinueItem[] {
     .all(profileId, limit * 3) as ProgressRow[];
   return pickContinue(rows, limit);
 }
+
+export function heroAction(
+  hero: Pick<Media, "via" | "kind" | "id" | "title">,
+  items: ContinueItem[],
+): { primary: { href: string; label: string }; secondary?: { href: string; label: string } } {
+  const details = `/title/${hero.via}/${hero.kind}/${hero.id}`;
+  const name = seriesTitle(hero.title).toLowerCase();
+  const hit = items.find(
+    (i) => i.via === hero.via && i.kind === hero.kind && (i.id === hero.id || i.title.toLowerCase() === name),
+  );
+  if (hit) return { primary: { href: hit.href, label: "Continue" }, secondary: { href: details, label: "Details" } };
+  return { primary: { href: details, label: "Details" } };
+}

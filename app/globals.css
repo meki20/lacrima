@@ -681,6 +681,9 @@ input.search::placeholder { color: var(--tx3); }
 }
 .player-audio:hover .player-vol,
 .player-audio:focus-within .player-vol { width: 96px; opacity: 1; }
+@media (hover: none) {
+  .player-vol { width: 96px; opacity: 1; }
+}
 .player-vol .scrub-track { height: 4px; }
 .player-vol .scrub-thumb {
   transform: translateY(-50%) scale(1);

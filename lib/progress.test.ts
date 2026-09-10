@@ -4,6 +4,7 @@ import type { ProgressRow } from "./progress.ts";
 import {
   continueDetail,
   continueRatio,
+  heroAction,
   pickContinue,
   toContinueItem,
   unitPip,
@@ -135,4 +136,34 @@ test("broken anchor JSON still produces a title-page href", () => {
   assert.equal(item.href, "/title/kitsu/anime/5");
   assert.equal(item.detail, "");
   assert.equal(item.ratio, null);
+});
+
+test("heroAction continues a show already in progress, including another season of the franchise", () => {
+  const watching = toContinueItem(
+    row({
+      media_id: 2,
+      title: "Attack on Titan Season 3",
+      unit: 12,
+      anchor: JSON.stringify({ kind: "seconds", at: 10, chapterId: "e12", chapterName: "E" }),
+    }),
+  );
+  const root = heroAction(
+    { via: "kitsu", kind: "anime", id: 1, title: "Attack on Titan" },
+    [watching],
+  );
+  assert.equal(root.primary.label, "Continue");
+  assert.equal(root.primary.href, watching.href);
+  assert.equal(root.secondary?.label, "Details");
+  assert.equal(root.secondary?.href, "/title/kitsu/anime/1");
+  const fresh = heroAction(
+    { via: "kitsu", kind: "anime", id: 9, title: "Frieren: Beyond Journey's End" },
+    [watching],
+  );
+  assert.equal(fresh.primary.label, "Details");
+  assert.equal(fresh.secondary, undefined);
+  const otherProvider = heroAction(
+    { via: "anilist", kind: "anime", id: 1, title: "Attack on Titan" },
+    [watching],
+  );
+  assert.equal(otherProvider.primary.label, "Details");
 });

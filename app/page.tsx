@@ -3,7 +3,7 @@ import Rail from "@/components/Rail";
 import { Degraded, Failed } from "@/components/ui";
 import { fetchHome } from "@/lib/metadata";
 import { currentProfile, topGenre } from "@/lib/profile";
-import { continueReading, type ContinueItem } from "@/lib/progress";
+import { continueReading, heroAction, type ContinueItem } from "@/lib/progress";
 
 export const dynamic = "force-dynamic";
 
@@ -29,12 +29,13 @@ export default async function Home() {
   const { data, via, degraded } = home.value;
   const { hero, popularAnime, popularManga, novels, forYou } = data;
   const art = hero?.banner ?? hero?.cover;
+  const billboard = hero ? heroAction(hero, resume) : null;
 
   return (
     <>
       <TopBar active="Home" />
 
-      {hero && (
+      {hero && billboard && (
         <div
           className="hero"
           style={{ backgroundImage: art ? `url(${art})` : undefined }}
@@ -55,9 +56,14 @@ export default async function Home() {
           </div>
           <p>{hero.description}</p>
           <div className="acts">
-            <a className="btn primary" href={`/title/${hero.via}/${hero.kind}/${hero.id}`}>
-              Details
+            <a className="btn primary" href={billboard.primary.href}>
+              {billboard.primary.label}
             </a>
+            {billboard.secondary && (
+              <a className="btn" href={billboard.secondary.href}>
+                {billboard.secondary.label}
+              </a>
+            )}
           </div>
         </div>
       )}
