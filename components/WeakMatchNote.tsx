@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { dismissWeak, weakDismissed } from "@/lib/match";
+import { dismissWeak, weakDismissed } from "@/lib/weak-note";
 
 const STORE = "lacrima-weak-dismiss";
 

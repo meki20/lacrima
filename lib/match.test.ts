@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CONFIDENT, WEAK, confidence, countScore, dismissWeak, normalize, rank, searchTitles, titleScore, weakDismissKey, weakDismissed } from "./match.ts";
+import { CONFIDENT, WEAK, confidence, countScore, normalize, rank, searchTitles, titleScore } from "./match.ts";
 import type { SourceManga } from "./sources/types.ts";
 
 const m = (title: string, chapterCount: number | null): SourceManga => ({
@@ -102,18 +102,4 @@ test("rank uses the best of several expected titles", () => {
     12,
   );
   assert.ok(ranked[0].confidence >= CONFIDENT, `got ${ranked[0].confidence}`);
-});
-
-test("weak match dismiss is per title and survives junk storage", () => {
-  const aot = weakDismissKey("kitsu", "anime", 7442);
-  const op = weakDismissKey("anilist", "anime", 21);
-  assert.equal(aot, "kitsu:anime:7442");
-  assert.equal(weakDismissed(null, aot), false);
-  assert.equal(weakDismissed("{nope", aot), false);
-  const once = dismissWeak(null, aot);
-  assert.equal(weakDismissed(once, aot), true);
-  assert.equal(weakDismissed(once, op), false);
-  const twice = dismissWeak(once, aot);
-  assert.equal(JSON.parse(twice).length, 1);
-  assert.equal(weakDismissed(dismissWeak(once, op), op), true);
 });
