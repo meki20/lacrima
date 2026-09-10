@@ -1426,6 +1426,10 @@ function EpisodeDock({ episodes, currentId }: { episodes: DockEpisode[]; current
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    document.querySelector<HTMLElement>(".player-ep-menu a.on")?.scrollIntoView({ block: "nearest" });
+  }, [open, currentId]);
   return (
     <div
       className="player-lang"
