@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { windowEpisodes } from "@/lib/series";
+import { useRouter } from "next/navigation";
+import MarkMenu from "./MarkMenu";
+import { isChapterRead, pushProgress, type ProgressWrite } from "@/lib/progress-write";
 
 export type EpisodeRow = {
   id: string;
@@ -29,43 +31,54 @@ function seasonTag(s: number | null | undefined) {
 export default function EpisodeList({
   episodes,
   readingId,
+  unit,
+  progress,
   base,
-  hideSeasons = false,
-  seasonHint = null,
-  episodeOffset = 0,
-  episodeCount = null,
+  indexOffset = 0,
 }: {
   episodes: EpisodeRow[];
   readingId: string | null;
+  unit: number;
+  progress: Omit<ProgressWrite, "unit" | "chapterId" | "chapterName" | "pages">;
   /** `/read/{via}/{kind}/{id}/` — episode id is encoded on the end. */
   base: string;
-  hideSeasons?: boolean;
-  seasonHint?: number | null;
-  /** Absolute-position window for a multi-part franchise. See lib/series.ts. */
-  episodeOffset?: number;
-  episodeCount?: number | null;
+  /** When this list is a season window, the index of episodes[0] in the source list. */
+  indexOffset?: number;
 }) {
+  const router = useRouter();
   const seasons = useMemo(() => {
     const set = new Set(episodes.map((e) => e.season ?? 1));
     return [...set].sort((a, b) => rank(a) - rank(b));
   }, [episodes]);
 
-  const initial = seasonHint && seasons.includes(seasonHint)
-    ? seasonHint
-    : (seasons.find((s) => s > 0) ?? seasons[0] ?? 1);
+  const initial = seasons.find((s) => s > 0) ?? seasons[0] ?? 1;
   const [season, setSeason] = useState(initial);
-  const shown = hideSeasons
-    ? windowEpisodes(episodes, episodeOffset, episodeCount, seasonHint)
-    : seasons.length > 1
-      ? (() => {
-          const hit = episodes.filter((e) => (e.season ?? 1) === season);
-          return hit.length ? hit : episodes;
-        })()
-      : episodes;
+  const [selectedId, setSelectedId] = useState<string | null>(readingId);
+  const shown = seasons.length > 1
+    ? (() => {
+        const hit = episodes.filter((e) => (e.season ?? 1) === season);
+        return hit.length ? hit : episodes;
+      })()
+    : episodes;
+  const currentLocal = episodes.findIndex((e) => e.id === readingId);
+  const current = currentLocal >= 0 ? indexOffset + currentLocal : -1;
+
+  const play = (c: EpisodeRow, extra: { skipAhead?: boolean; exact?: boolean } = { skipAhead: true }) => {
+    const i = episodes.findIndex((e) => e.id === c.id);
+    return pushProgress({
+      ...progress,
+      unit: indexOffset + i + 1,
+      chapterId: c.id,
+      chapterName: c.name,
+      season: c.season,
+      episode: c.number,
+      ...extra,
+    });
+  };
 
   return (
     <>
-      {seasons.length > 1 && !hideSeasons && (
+      {seasons.length > 1 && (
         <div className="filters" style={{ margin: "0 0 12px" }}>
           {seasons.map((s) => (
             <button
@@ -81,28 +94,74 @@ export default function EpisodeList({
       )}
       <div className="rows eps scrollbox">
         {shown.map((c) => {
+          const i = episodes.findIndex((e) => e.id === c.id);
           const here = c.id === readingId;
+          const selected = c.id === selectedId;
+          const read = isChapterRead(indexOffset + i, current, unit);
           const tag = seasonTag(c.season);
           return (
-            <a
-              className={`row${here ? " here" : ""}`}
+            <div
+              className={`row${here ? " here" : ""}${selected ? " selected" : ""}${read ? " read" : ""}`}
               key={c.id}
-              href={`${base}${encodeURIComponent(c.id)}`}
             >
-              <span className="row-thumb">
-                {c.thumbnailUrl ? (
-                  <img src={c.thumbnailUrl} alt="" loading="lazy" decoding="async" />
-                ) : null}
-              </span>
-              <div className="row-body">
-                <h3>
-                  <span className="mono">{tag ? `${tag} · E${c.number}` : `E${c.number}`}</span>
-                  {c.name}
-                </h3>
-                {here && c.overview ? <p className="row-meta">{c.overview}</p> : null}
-              </div>
-              {here && <span className="badge">watching</span>}
-            </a>
+              <button
+                type="button"
+                className="episode-select"
+                aria-expanded={selected}
+                onClick={() => setSelectedId((id) => (id === c.id ? null : c.id))}
+              >
+                <span className="row-thumb">
+                  {c.thumbnailUrl ? (
+                    <img src={c.thumbnailUrl} alt="" loading="lazy" decoding="async" />
+                  ) : null}
+                </span>
+                <div className="row-body">
+                  <h3>
+                    <span className="mono">{tag ? `${tag} · E${c.number}` : `E${c.number}`}</span>
+                    {c.name}
+                  </h3>
+                  {c.overview ? (
+                    <p className="row-meta" aria-hidden={!selected}>
+                      {c.overview}
+                    </p>
+                  ) : null}
+                </div>
+                {here && <span className="badge">watching</span>}
+              </button>
+              <a
+                className="btn primary episode-play"
+                href={`${base}${encodeURIComponent(c.id)}`}
+                aria-hidden={!selected}
+                tabIndex={selected ? undefined : -1}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void play(c).then(() => router.push(`${base}${encodeURIComponent(c.id)}`));
+                }}
+              >
+                Play episode
+              </a>
+              <MarkMenu
+                kind="anime"
+                read={indexOffset + i + 1 <= unit}
+                onMark={() => void play(c).then(() => router.refresh())}
+                onUpTo={() => void play(c, { exact: true }).then(() => router.refresh())}
+                onUnmark={() => {
+                  if (i > 0) {
+                    void play(episodes[i - 1], { exact: true }).then(() => router.refresh());
+                    return;
+                  }
+                  void pushProgress({
+                    ...progress,
+                    unit: indexOffset,
+                    chapterId: c.id,
+                    chapterName: c.name,
+                    season: c.season,
+                    episode: c.number,
+                    exact: true,
+                  }).then(() => router.refresh());
+                }}
+              />
+            </div>
           );
         })}
       </div>

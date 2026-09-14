@@ -199,7 +199,129 @@ const MIGRATIONS: string[] = [
       primary key (kind, id)
     );
   `,
-];
+
+  // 7 — subtitle placement belongs to a profile and must follow it between devices.
+  `
+    alter table profiles add column caption_x real not null default 50;
+    alter table profiles add column caption_y real not null default 90;
+  `,
+
+  // 8 — playback defaults and provider history are profile data, not browser data.
+  `
+    create table profile_settings (
+      profile_id       integer primary key references profiles(id) on delete cascade,
+      audio_lang       text not null default 'ja',
+      subtitle_lang    text not null default 'auto',
+      caption_scale    real not null default 1,
+      reader_mode      text not null default 'paged',
+      reader_rtl       integer not null default 1,
+      reader_fit       text not null default 'height',
+      reader_spread    text not null default 'single'
+    );
+
+    create table provider_choices (
+      id         integer primary key autoincrement,
+      profile_id integer not null references profiles(id) on delete cascade,
+      provider   text not null,
+      chosen_at  integer not null
+    );
+    create index provider_choices_profile_time on provider_choices(profile_id, chosen_at desc);
+  `,
+
+  // 9 — replace the old rust default without overwriting anyone's custom accent.
+  `
+    update profiles set accent = '#630E19' where accent = '#c44532';
+  `,
+
+  // 10 — Yours owns the library grid, so the row must render without metadata.
+  //     Pins, characters, stickers and daily activity are per-profile identity.
+  `
+    alter table library add column title text;
+    alter table library add column cover text;
+    alter table library add column color text;
+    alter table library add column units integer;
+    alter table library add column genres text not null default '[]';
+    alter table library add column pin integer not null default 0;
+
+    create table if not exists activity (
+      profile_id integer not null references profiles(id) on delete cascade,
+      day        text    not null,
+      anime      integer not null default 0,
+      manga      integer not null default 0,
+      novel      integer not null default 0,
+      night      integer not null default 0,
+      primary key (profile_id, day)
+    );
+
+    create table if not exists profile_characters (
+      profile_id   integer not null references profiles(id) on delete cascade,
+      via          text    not null,
+      character_id integer not null,
+      name         text    not null,
+      image        text,
+      sort         integer not null default 0,
+      primary key (profile_id, via, character_id)
+    );
+
+    create table if not exists stickers (
+      profile_id integer not null references profiles(id) on delete cascade,
+      sticker_id text    not null,
+      earned_at  integer,
+      x          real,
+      y          real,
+      rot        real    not null default 0,
+      surface    text,
+      primary key (profile_id, sticker_id)
+    );
+  `,
+
+  // 11 — placeholder emoji stickers and favourite-character rows were a first pass.
+  //     Stickers are characters earned by watching; those rows are not that.
+  `
+    delete from stickers;
+    delete from profile_characters;
+  `,
+
+  // 12 — watch time is accumulated seconds, not episode-count × 24 minutes.
+  //     Sticker pools cache character/secret art URLs per title.
+  `
+    alter table progress add column watched_seconds integer not null default 0;
+
+    create table if not exists sticker_pools (
+      via        text    not null,
+      media_id   integer not null,
+      payload    text    not null,
+      fetched_at integer not null,
+      primary key (via, media_id)
+    );
+
+    create table if not exists sticker_art (
+      hash text primary key,
+      url  text not null,
+      mime text
+    );
+  `,
+
+  // 13 — page decorations: the same earned sticker can live on many routes.
+  `
+    create table if not exists sticker_placements (
+      id         integer primary key autoincrement,
+      profile_id integer not null references profiles(id) on delete cascade,
+      sticker_id text    not null,
+      path       text    not null,
+      x          real    not null,
+      y          real    not null,
+      scale      real    not null default 1
+    );
+    create index if not exists sticker_placements_page on sticker_placements (profile_id, path);
+  `,
+
+  // 14 — rotation while a placed sticker is held in edit mode.
+  `alter table sticker_placements add column rot real not null default 0;`,
+
+  // 15 — phone and desktop decorations are separate; same breakpoint as the rail.
+  `alter table sticker_placements add column surface text not null default 'desktop';`,
+]
 
 function migrate(d: DatabaseSync) {
   const { user_version: at } = d.prepare("pragma user_version").get() as {
@@ -234,6 +356,7 @@ export type Anchor =
       /** Episode length when known, so Continue can show time left. */
       duration?: number;
       season?: number;
+      episode?: number;
     }
   /** `chapterId` is the source's, shared by every device pointing at this server. */
   | {
@@ -243,7 +366,7 @@ export type Anchor =
       chapterName: string;
       pages?: number;
     }
-  | { kind: "paragraph"; cfi: string };
+  | { kind: "paragraph"; cfi: string; chapterId?: string | number; chapterName?: string };
 
 function seed(d: DatabaseSync) {
   const now = Date.now();
@@ -255,8 +378,8 @@ function seed(d: DatabaseSync) {
   );
 
   const people: [string, string, string, string[]][] = [
-    ["Luka", "#c44532", "#c44532", ["Adventure", "Drama", "Fantasy"]],
-    ["Guest", "#e8c56b", "#c44532", ["Comedy", "Slice of Life"]],
+    ["Luka", "#630E19", "#630E19", ["Adventure", "Drama", "Fantasy"]],
+    ["Guest", "#e8c56b", "#630E19", ["Comedy", "Slice of Life"]],
   ];
 
   for (const [name, avatar, accent, genres] of people) {

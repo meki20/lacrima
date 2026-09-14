@@ -7,6 +7,7 @@ import {
   parseLangToken,
   pickAudioTrack,
   speaksLang,
+  subtitleLangs,
   trackLangs,
 } from "./audio.ts";
 
@@ -67,6 +68,12 @@ test("subtitle flags are not spoken audio", () => {
   assert.deepEqual(claimedLangs(jp), ["ja"]);
   assert.deepEqual(claimedLangs(en), ["en"]);
   assert.deepEqual(claimedLangs(dual).sort(), ["en", "ja"]);
+});
+
+test("subtitle languages are read separately from spoken audio", () => {
+  assert.deepEqual(subtitleLangs("🔊 aac · 🇯🇵 💬 🇺🇸🇫🇷 💾 1.4 GB"), ["fr", "en"]);
+  assert.deepEqual(subtitleLangs("Re.Zero.S04E13.English.Subs.1080p"), ["en"]);
+  assert.deepEqual(subtitleLangs("🔊 aac · 🇯🇵 💬 🇫🇷"), ["fr"]);
 });
 
 test("pickAudioTrack failovers when the file only speaks the other language", () => {

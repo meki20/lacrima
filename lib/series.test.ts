@@ -6,8 +6,12 @@ import {
   collapseSeries,
   colonPrefix,
   episodeWindow,
+  franchiseKey,
+  franchiseLabel,
   partLabel,
+  progressTree,
   seriesTitle,
+  canonicalTitle,
   windowEpisodes,
   type SeriesNode,
 } from "./series.ts";
@@ -75,6 +79,33 @@ test("collapseSeries groups JoJo parts under the franchise name", () => {
   assert.equal(out[0].id, 2);
 });
 
+test("collapseSeries folds Dr. Stone cours under one name", () => {
+  const out = collapseSeries([
+    media(1, "Dr. STONE"),
+    media(2, "Dr. STONE: Stone Wars"),
+    media(3, "Dr. STONE: New World"),
+    media(4, "Dr. STONE: Science Future"),
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].title, "Dr. STONE");
+  assert.equal(out[0].id, 1);
+  assert.equal(canonicalTitle("Dr. STONE: Stone Wars", [
+    "Dr. STONE",
+    "Dr. STONE: Stone Wars",
+  ]), "Dr. STONE");
+});
+
+test("franchiseKey folds progress-style Dr. Stone titles that have no colon", () => {
+  const peers = ["Dr. STONE SCIENCE FUTURE", "Dr. STONE New World", "Dr. STONE"];
+  assert.equal(franchiseKey(peers[0]!, peers), "dr. stone");
+  assert.equal(franchiseLabel(peers[0]!, peers), "Dr. STONE");
+  assert.equal(
+    franchiseKey("Dr. STONE SCIENCE FUTURE", ["Dr. STONE SCIENCE FUTURE", "Dr. STONE New World"]),
+    "dr. stone",
+  );
+  assert.equal(franchiseKey("Frieren: Beyond Journey's End", peers.concat("Frieren: Beyond Journey's End")), "frieren: beyond journey's end");
+});
+
 test("a lone subtitle is not stripped (Frieren, Kaguya, Re:Zero)", () => {
   assert.equal(collapseSeries([media(1, "Frieren: Beyond Journey's End")])[0].title, "Frieren: Beyond Journey's End");
   assert.equal(collapseSeries([media(1, "Kaguya-sama: Love is War")])[0].title, "Kaguya-sama: Love is War");
@@ -114,6 +145,7 @@ test("partLabel prefers season numbers, then the subtitle", () => {
     "Steel Ball Run",
   );
   assert.equal(partLabel("Attack on Titan: No Regrets", "Attack on Titan", true), "No Regrets");
+  assert.equal(partLabel("Dr. STONE: Special Episode – RYUSUI", "Dr. STONE", true), "RYUSUI");
 });
 
 test("assembleSeries walks prequel/sequel and collects specials", () => {
@@ -148,6 +180,50 @@ test("assembleSeries walks prequel/sequel and collects specials", () => {
   assert.equal(fromMiddle.specials[0].label, "No Regrets");
 });
 
+test("assembleSeries crosses a chronological special without counting it as a season", () => {
+  const node = (
+    id: number,
+    title: string,
+    format: string,
+    edges: SeriesNode["edges"],
+  ): [number, SeriesNode] => [id, { id, title, format, edges }];
+
+  const nodes = new Map<number, SeriesNode>([
+    node(1, "Dr. STONE", "TV", [
+      { kind: "sequel", id: 2, title: "Dr. STONE: STONE WARS", format: "TV" },
+    ]),
+    node(2, "Dr. STONE: STONE WARS", "TV", [
+      { kind: "prequel", id: 1, title: "Dr. STONE", format: "TV" },
+      { kind: "sequel", id: 90, title: "Dr. STONE: Ryusui", format: "SPECIAL" },
+    ]),
+    node(90, "Dr. STONE: Ryusui", "SPECIAL", [
+      { kind: "prequel", id: 2, title: "Dr. STONE: STONE WARS", format: "TV" },
+      { kind: "sequel", id: 3, title: "Dr. STONE: NEW WORLD", format: "TV" },
+    ]),
+    node(3, "Dr. STONE: NEW WORLD", "TV", [
+      { kind: "prequel", id: 90, title: "Dr. STONE: Ryusui", format: "SPECIAL" },
+    ]),
+  ]);
+
+  const s = assembleSeries(3, nodes);
+  assert.equal(s.rootId, 1);
+  assert.deepEqual(s.parts.map((p) => p.id), [1, 2, 3]);
+  assert.deepEqual(s.specials.map((p) => p.id), [90]);
+});
+
+test("assembleSeries gives a punctuation-only sequel an ordinal season label", () => {
+  const nodes = new Map<number, SeriesNode>([
+    [1, { id: 1, title: "Kaguya-sama: Love is War", format: "TV", edges: [
+      { kind: "sequel", id: 2, title: "Kaguya-sama: Love is War?", format: "TV" },
+    ] }],
+    [2, { id: 2, title: "Kaguya-sama: Love is War?", format: "TV", edges: [
+      { kind: "prequel", id: 1, title: "Kaguya-sama: Love is War", format: "TV" },
+    ] }],
+  ]);
+
+  assert.deepEqual(assembleSeries(1, nodes).parts.map((p) => p.label), ["Season 1", "Season 2"]);
+});
+
 test("assembleSeries keeps a sequel even if that node was not loaded", () => {
   const nodes = new Map<number, SeriesNode>([
     [
@@ -178,6 +254,26 @@ test("episodeWindow sums units of earlier parts, unknown counts as 0", () => {
   assert.deepEqual(episodeWindow(parts, 2), { offset: 25, count: 12 });
   assert.deepEqual(episodeWindow(parts, 3), { offset: 37, count: null });
   assert.deepEqual(episodeWindow(parts, 999), { offset: 0, count: null });
+});
+
+test("progressTree is empty for a single part and names later seasons", () => {
+  assert.deepEqual(progressTree([{ id: 1, title: "Only", label: "1", kind: "part" }], 1, []), {});
+  const tree = progressTree(
+    [
+      { id: 1, title: "S1", label: "1", kind: "part" },
+      { id: 2, title: "S2", label: "2", kind: "part" },
+    ],
+    2,
+    [
+      { ok: true, value: { title: "Season 1", cover: null, units: 12 } },
+      { ok: false, reason: "down" },
+    ],
+  );
+  assert.equal(tree.partIndex, 1);
+  assert.deepEqual(tree.seriesParts, [
+    { mediaId: 1, title: "Season 1", cover: null, units: 12 },
+    { mediaId: 2, title: "S2", cover: null, units: 0 },
+  ]);
 });
 
 const ep = (number: number, season: number | null = null) => ({ number, season });
@@ -239,4 +335,11 @@ test("windowEpisodes takes the remainder for an unknown-count tail part", () => 
     shown.map((e) => e.number),
     [26, 27, 28, 29, 30],
   );
+});
+
+test("windowEpisodes never substitutes a regular episode for a special", () => {
+  const parent = [ep(1, 1), ep(2, 1), ep(1, 0)];
+  assert.deepEqual(windowEpisodes(parent, 0, 1, 0), [ep(1, 0)]);
+  assert.deepEqual(windowEpisodes(parent.slice(0, 2), 0, 1, 0), []);
+  assert.deepEqual(windowEpisodes([ep(1, 1)], 0, 1, 0), [ep(1, 1)]);
 });

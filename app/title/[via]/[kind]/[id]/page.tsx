@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
+import LibraryMenu from "@/components/LibraryMenu";
 import MatchList from "@/components/MatchList";
 import TitleChapters from "@/components/TitleChapters";
 import TopBar from "@/components/TopBar";
@@ -12,10 +13,12 @@ import { weakDismissKey } from "@/lib/weak-note";
 import { fetchTitle } from "@/lib/metadata";
 import { navTabForKind } from "@/lib/nav";
 import { currentProfile } from "@/lib/profile";
+import { getLibrary } from "@/lib/library";
 import { getProgress, parseAnchor, unitPip } from "@/lib/progress";
+import { awardForTitle } from "@/lib/stickers";
 import { pinBinding, resolveSource } from "@/lib/resolve";
 import { backend } from "@/lib/sources";
-import { episodeWindow, fetchSeries, seriesTitle, type Series } from "@/lib/series";
+import { episodeWindow, fetchSeries, progressTree, seriesTitle, type Series } from "@/lib/series";
 
 export const dynamic = "force-dynamic";
 
@@ -87,7 +90,8 @@ export default async function Title({
   const forResolve =
     selectedMeta?.kind === "special" || !series
       ? selected
-      : { ...m, title: series.title, aliases: selected.aliases };
+      : { ...selected, title: series.title };
+  const selectedIsSpecial = selectedMeta?.kind === "special";
 
   // Each season's own episode count, so the flat episode list a source addon
   // returns can be sliced by absolute position instead of trusting whatever
@@ -112,7 +116,7 @@ export default async function Title({
         seriesParts.map((p, i) => ({ id: p.id, units: partUnits[i]?.ok ? partUnits[i].value.units : null })),
         selectedId,
       )
-    : { offset: 0, count: null };
+    : { offset: 0, count: selectedIsSpecial ? selected.units : null };
 
   const returnTo = partHref(here, viewingSpecials ? "specials" : selectedId, false, firstId);
 
@@ -134,9 +138,16 @@ export default async function Title({
   const resolution = res?.ok ? res.value : null;
   const binding = resolution?.binding ?? null;
   const progressRow = getProgress(me.id, selected.via, selected.id);
+  const libraryEntry = getLibrary(me.id, selected.via, selected.id) ?? null;
+  if (progressRow) {
+    await awardForTitle(me.id, selected.via, selected.id, selected.kind, {
+      seconds: progressRow.watched_seconds,
+      unit: progressRow.unit,
+    });
+  }
   const anchor = parseAnchor(progressRow?.anchor ?? null);
   const readingId =
-    anchor?.kind === "page" || anchor?.kind === "seconds" ? String(anchor.chapterId) : null;
+    anchor && "chapterId" in anchor && anchor.chapterId != null ? String(anchor.chapterId) : null;
   const unit = selected.kind === "anime" ? "episode" : "chapter";
   const resume = readingId
     ? {
@@ -148,13 +159,20 @@ export default async function Title({
     anchor?.kind === "page"
       ? `p.${anchor.index + 1}`
       : progressRow
-        ? unitPip(selected.kind, progressRow.unit, anchor?.kind === "seconds" ? anchor.season : null)
+        ? unitPip(
+            selected.kind,
+            progressRow.unit,
+            anchor?.kind === "seconds" ? anchor.season : null,
+            anchor?.kind === "seconds" ? anchor.episode : null,
+          )
         : null;
 
   const heading = series?.title || seriesTitle(m.title);
   const specialsOn =
     viewingSpecials || (selectedMeta?.kind === "special" && selectedMeta.id === selectedId);
-  const seasonHint = Number(/^Season (\d+)$/i.exec(selectedMeta?.label ?? "")?.[1] ?? "") || null;
+  const seasonHint = selectedIsSpecial
+    ? 0
+    : Number(/^Season (\d+)$/i.exec(selectedMeta?.label ?? "")?.[1] ?? "") || null;
 
   return (
     <>
@@ -176,19 +194,34 @@ export default async function Title({
           <span style={{ color: "var(--tx3)", fontSize: 12 }}>{m.genres.slice(0, 3).join(" · ")}</span>
         </div>
         <p>{m.description}</p>
-        <Suspense fallback={null}>
-          <WatchCta
-            resume={resume}
-            pageLabel={resumeHint}
-            binding={binding}
-            kind={selected.kind}
-            via={selected.via}
-            id={selected.id}
-            episodeOffset={episodeOffset}
-            episodeCount={episodeCount}
-            seasonHint={seasonHint}
+        <div className="acts">
+          <Suspense fallback={null}>
+            <WatchCta
+              resume={resume}
+              pageLabel={resumeHint}
+              binding={binding}
+              kind={selected.kind}
+              via={selected.via}
+              id={selected.id}
+              episodeOffset={episodeOffset}
+              episodeCount={episodeCount}
+              seasonHint={seasonHint}
+            />
+          </Suspense>
+          <LibraryMenu
+            media={{
+              via: selected.via,
+              id: selected.id,
+              kind: selected.kind,
+              title: selected.title,
+              cover: selected.cover,
+              color: selected.color,
+              units: selected.units,
+              genres: selected.genres,
+            }}
+            entry={libraryEntry}
           />
-        </Suspense>
+        </div>
       </div>
 
       <main>
@@ -220,27 +253,6 @@ export default async function Title({
           <Failed reason={res && !res.ok ? res.reason : "Unknown resolution error."} />
         ) : (
           <>
-            {binding && resolution.tier === "confident" && (
-              <div className="srcchip">
-                Reading from <b>{binding.source_title}</b>
-                <span className="mono">{Math.round(binding.confidence * 100)}% match</span>
-                {binding.pinned ? <span className="mono">pinned</span> : null}
-                <a href={change ? returnTo : `${returnTo}${returnTo.includes("?") ? "&" : "?"}change=1#alternatives`}>
-                  {change ? "Never mind" : "Change"}
-                </a>
-              </div>
-            )}
-
-            {binding && resolution.tier === "weak" && (
-              <WeakMatchNote
-                storeKey={weakDismissKey(selected.via, selected.kind, selected.id)}
-                sourceTitle={binding.source_title}
-                confidence={binding.confidence}
-                href={change ? returnTo : `${returnTo}${returnTo.includes("?") ? "&" : "?"}change=1#alternatives`}
-                change={change}
-              />
-            )}
-
             {resolution.tier === "none" && (
               <div className="empty">
                 <b>{q ? `Nothing matched “${q}”` : "No source has this yet"}</b>
@@ -281,6 +293,16 @@ export default async function Title({
                   via={selected.via}
                   id={selected.id}
                   readingId={readingId}
+                  readUnit={progressRow?.unit ?? 0}
+                  progress={{
+                    via: selected.via,
+                    mediaId: selected.id,
+                    kind: selected.kind,
+                    title: selected.title,
+                    cover: selected.cover,
+                    durationSeconds: selected.unitMinutes ? selected.unitMinutes * 60 : null,
+                    ...(wantsWindow ? progressTree(seriesParts, selectedId, partUnits) : {}),
+                  }}
                   here={returnTo}
                   hideSeasonChips={Boolean(series && series.parts.length > 1)}
                   seasonHint={seasonHint}
@@ -290,7 +312,28 @@ export default async function Title({
               </Suspense>
             )}
 
-            {resolution.candidates.length > 0 && (
+            {binding && resolution.tier === "confident" && (
+              <div className="srcchip">
+                Reading from <b>{binding.source_title}</b>
+                <span className="mono">{Math.round(binding.confidence * 100)}% match</span>
+                {binding.pinned ? <span className="mono">pinned</span> : null}
+                <a href={change ? returnTo : `${returnTo}${returnTo.includes("?") ? "&" : "?"}change=1#alternatives`}>
+                  {change ? "Never mind" : "Change"}
+                </a>
+              </div>
+            )}
+
+            {binding && resolution.tier === "weak" && (
+              <WeakMatchNote
+                storeKey={weakDismissKey(selected.via, selected.kind, selected.id)}
+                sourceTitle={binding.source_title}
+                confidence={binding.confidence}
+                href={change ? returnTo : `${returnTo}${returnTo.includes("?") ? "&" : "?"}change=1#alternatives`}
+                change={change}
+              />
+            )}
+
+            {(change || q || resolution.tier === "none") && resolution.candidates.length > 0 && (
               <MatchList
                 candidates={resolution.candidates}
                 expectedTitles={searchTitles(forResolve.title, [...(forResolve.aliases ?? []), q])}

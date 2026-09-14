@@ -87,14 +87,11 @@ test("parseSubChoice accepts off, langs and file ids", () => {
   assert.equal(parseSubChoice(null), undefined);
 });
 
-test("a remux mid-episode is timed from the keyframe, not the requested seek", () => {
-  assert.equal(remuxEpisodeTime(180, 0, false, 173.2), 173.2);
-  assert.equal(remuxEpisodeTime(180, 10, false, 173.2), 183.2);
+test("a resumed remux times subtitles from its accurate requested start", () => {
   assert.equal(remuxEpisodeTime(180, 0, false), 180);
-  assert.equal(remuxEpisodeTime(180, 10, false, 0), 190);
-  assert.equal(remuxEpisodeTime(180, 10, false, 3773), 190);
-  assert.equal(remuxEpisodeTime(0, 12, false, 0), 12);
-  assert.equal(remuxEpisodeTime(180, 10, true, 173.2), 10);
+  assert.equal(remuxEpisodeTime(180, 10, false), 190);
+  assert.equal(remuxEpisodeTime(0, 12, false), 12);
+  assert.equal(remuxEpisodeTime(180, 10, true), 10);
 });
 
 test("parseCues reads VTT, SRT and ASS on episode time", () => {

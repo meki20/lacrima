@@ -1,6 +1,10 @@
 import { db, plain, type Anchor } from "./db.ts";
 import type { Media, MediaKind, ProviderSlug } from "./media.ts";
-import { seriesTitle } from "./series.ts";
+import { ensureLibrary } from "./library.ts";
+import { awardForTitle } from "./stickers.ts";
+import { isNightHour, markActivity } from "./yours.ts";
+import { franchiseKey, franchiseLabel, seriesTitle } from "./series.ts";
+import { ANIME_EPISODE_SECONDS, heldUnit, skipWatchSeconds, spanWatchSeconds, usesSeriesTree, type SeriesPartMark } from "./progress-write.ts";
 
 export type ProgressRow = {
   profile_id: number;
@@ -13,6 +17,7 @@ export type ProgressRow = {
   title: string | null;
   cover: string | null;
   updated_at: number;
+  watched_seconds: number;
 };
 
 export const parseAnchor = (raw: string | null): Anchor | null => {
@@ -35,35 +40,131 @@ export function getProgress(
   return row && plain(row);
 }
 
-export function setProgress(p: {
+export async function setProgress(p: {
   profileId: number;
-  media: Pick<Media, "via" | "id" | "kind" | "title" | "cover">;
+  media: Pick<Media, "via" | "id" | "kind" | "title" | "cover"> &
+    Partial<Pick<Media, "color" | "units" | "genres">>;
   unit: number;
   anchor: Anchor;
+  watchedDelta?: number;
+  skipAhead?: boolean;
+  exact?: boolean;
+  durationSeconds?: number;
 }) {
+  const prev = getProgress(p.profileId, p.media.via, p.media.id);
+  const prevUnit = prev?.unit ?? 0;
+  const unit = p.exact ? Math.max(0, Math.floor(p.unit)) : heldUnit(p.media.kind, prevUnit, p.unit);
+  const tick = Math.max(0, Math.min(30, Math.floor(p.watchedDelta ?? 0)));
+  const ep =
+    p.durationSeconds && p.durationSeconds > 1
+      ? p.durationSeconds
+      : p.media.kind === "anime" && (p.skipAhead || p.exact)
+        ? ANIME_EPISODE_SECONDS
+        : 0;
+  let credit = 0;
+  if (p.media.kind === "anime") {
+    if (p.exact) {
+      const sign = unit >= prevUnit ? 1 : -1;
+      credit = sign * spanWatchSeconds(prevUnit, unit, ep);
+    } else if (p.skipAhead) {
+      credit = skipWatchSeconds(prevUnit, unit, ep);
+    }
+  }
+  const delta = tick + credit;
   db()
     .prepare(
       `insert into progress
-         (profile_id, via, media_id, media_type, unit, anchor, title, cover, updated_at)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (profile_id, via, media_id, media_type, unit, anchor, title, cover, updated_at, watched_seconds)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        on conflict(profile_id, via, media_id) do update set
          unit = excluded.unit,
          anchor = excluded.anchor,
          title = excluded.title,
          cover = excluded.cover,
-         updated_at = excluded.updated_at`,
+         updated_at = excluded.updated_at,
+         watched_seconds = max(0, progress.watched_seconds + excluded.watched_seconds)`,
     )
     .run(
       p.profileId,
       p.media.via,
       p.media.id,
       p.media.kind,
-      p.unit,
+      unit,
       JSON.stringify(p.anchor),
       p.media.title,
       p.media.cover,
       Date.now(),
+      delta,
     );
+  const bumped = !prev || prev.unit !== unit;
+  markActivity(p.profileId, p.media.kind, { unit: bumped, night: bumped && isNightHour() });
+  ensureLibrary(p.profileId, {
+    via: p.media.via,
+    id: p.media.id,
+    kind: p.media.kind,
+    title: p.media.title,
+    cover: p.media.cover,
+    color: p.media.color ?? null,
+    units: p.media.units ?? null,
+    genres: p.media.genres ?? [],
+  });
+  const seconds = Math.max(0, (prev?.watched_seconds ?? 0) + delta);
+  const granted = await awardForTitle(p.profileId, p.media.via, p.media.id, p.media.kind, {
+    seconds,
+    unit,
+  });
+  return granted;
+}
+
+function quietAnchor(kind: Media["kind"]): Anchor {
+  if (kind === "anime") return { kind: "seconds", at: 0, chapterId: "-", chapterName: "" };
+  if (kind === "novel") return { kind: "paragraph", cfi: "0" };
+  return { kind: "page", index: 0, chapterId: "-", chapterName: "" };
+}
+
+export async function setProgressTree(
+  p: Parameters<typeof setProgress>[0] & {
+    seriesParts?: SeriesPartMark[];
+    partIndex?: number;
+  },
+) {
+  const parts = p.seriesParts?.filter((x) => x.mediaId > 0) ?? [];
+  const idx = p.partIndex;
+  if (!usesSeriesTree(p) || idx == null) return setProgress(p);
+  const out = [];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (i === idx) {
+      out.push(...(await setProgress(p)));
+      continue;
+    }
+    if (i < idx && part.units > 0) {
+      out.push(
+        ...(await setProgress({
+          ...p,
+          media: { ...p.media, id: part.mediaId, title: part.title, cover: part.cover },
+          unit: part.units,
+          skipAhead: true,
+          exact: false,
+          watchedDelta: 0,
+          anchor: quietAnchor(p.media.kind),
+        })),
+      );
+    } else if (i > idx && p.exact) {
+      out.push(
+        ...(await setProgress({
+          ...p,
+          media: { ...p.media, id: part.mediaId, title: part.title, cover: part.cover },
+          unit: 0,
+          skipAhead: false,
+          exact: true,
+          watchedDelta: 0,
+          anchor: quietAnchor(p.media.kind),
+        })),
+      );
+    }
+  }
+  return out;
 }
 
 export type ContinueItem = Media & {
@@ -73,9 +174,15 @@ export type ContinueItem = Media & {
   ratio: number | null;
 };
 
-export function unitPip(kind: MediaKind, unit: number, season?: number | null): string {
+export function unitPip(
+  kind: MediaKind,
+  unit: number,
+  season?: number | null,
+  episode?: number | null,
+): string {
   if (kind === "anime") {
-    return season != null && season > 0 ? `S${season}·E${unit}` : `Ep. ${unit}`;
+    const n = episode && episode > 0 ? episode : unit;
+    return season != null && season > 0 ? `S${season}·E${n}` : `Ep. ${n}`;
   }
   return `Ch. ${unit}`;
 }
@@ -115,6 +222,7 @@ export function toContinueItem(r: ProgressRow): ContinueItem {
   const name = seriesTitle(r.title ?? "Untitled");
   const base = `/${r.via}/${r.media_type}/${r.media_id}`;
   const season = anchor?.kind === "seconds" ? anchor.season : undefined;
+  const episode = anchor?.kind === "seconds" ? anchor.episode : undefined;
   return {
     id: r.media_id,
     via: r.via,
@@ -128,11 +236,11 @@ export function toContinueItem(r: ProgressRow): ContinueItem {
     units: null,
     unitLabel: r.media_type === "anime" ? "episodes" : "chapters",
     score: null,
-    pip: unitPip(r.media_type, r.unit, season),
+    pip: unitPip(r.media_type, r.unit, season, episode),
     detail: continueDetail(r.media_type, anchor),
     ratio: continueRatio(anchor),
     href:
-      anchor?.kind === "page" || anchor?.kind === "seconds"
+      anchor && "chapterId" in anchor && anchor.chapterId != null
         ? `/read${base}/${encodeURIComponent(String(anchor.chapterId))}`
         : `/title${base}`,
   };
@@ -146,11 +254,15 @@ export function pickContinue(rows: ProgressRow[], limit: number): ContinueItem[]
   const seen = new Set<string>();
   const out: ContinueItem[] = [];
   for (const r of rows) {
-    const name = seriesTitle(r.title ?? "Untitled");
-    const k = `${r.via}|${r.media_type}|${name.toLowerCase()}`;
+    const peers = rows
+      .filter((x) => x.via === r.via && x.media_type === r.media_type)
+      .map((x) => x.title ?? "");
+    const k = `${r.via}|${r.media_type}|${franchiseKey(r.title ?? "", peers)}`;
     if (seen.has(k)) continue;
     seen.add(k);
-    out.push(toContinueItem(r));
+    const item = toContinueItem(r);
+    item.title = franchiseLabel(r.title ?? "Untitled", peers);
+    out.push(item);
     if (out.length >= limit) break;
   }
   return out;
@@ -174,9 +286,16 @@ export function heroAction(
   items: ContinueItem[],
 ): { primary: { href: string; label: string }; secondary?: { href: string; label: string } } {
   const details = `/title/${hero.via}/${hero.kind}/${hero.id}`;
-  const name = seriesTitle(hero.title).toLowerCase();
+  const peers = [
+    hero.title,
+    ...items.filter((i) => i.via === hero.via && i.kind === hero.kind).map((i) => i.title),
+  ];
+  const fold = franchiseKey(hero.title, peers);
   const hit = items.find(
-    (i) => i.via === hero.via && i.kind === hero.kind && (i.id === hero.id || i.title.toLowerCase() === name),
+    (i) =>
+      i.via === hero.via &&
+      i.kind === hero.kind &&
+      (i.id === hero.id || franchiseKey(i.title, peers) === fold),
   );
   if (hit) return { primary: { href: hit.href, label: "Continue" }, secondary: { href: details, label: "Details" } };
   return { primary: { href: details, label: "Details" } };

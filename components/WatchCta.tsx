@@ -26,16 +26,14 @@ export default async function WatchCta({
 }) {
   if (resume) {
     return (
-      <div className="acts">
-        <a className="btn primary" href={resume.href}>
-          {resume.label}
-          {pageLabel ? (
-            <span className="mono" style={{ color: "inherit", opacity: 0.7 }}>
-              {pageLabel}
-            </span>
-          ) : null}
-        </a>
-      </div>
+      <a className="btn primary" href={resume.href}>
+        {resume.label}
+        {pageLabel ? (
+          <span className="mono" style={{ color: "inherit", opacity: 0.7 }}>
+            {pageLabel}
+          </span>
+        ) : null}
+      </a>
     );
   }
   if (!binding) return null;
@@ -48,10 +46,8 @@ export default async function WatchCta({
   });
   if (!first) return null;
   return (
-    <div className="acts">
-      <a className="btn primary" href={playHref(via, kind, id, first.id)}>
-        {playLabel(kind, first.number)}
-      </a>
-    </div>
+    <a className="btn primary" href={playHref(via, kind, id, first.id)}>
+      {playLabel(kind, first.number)}
+    </a>
   );
 }

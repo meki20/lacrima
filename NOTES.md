@@ -33,12 +33,8 @@ things deliberately deferred.
 
 `python -m http.server 8123` inside `mockups/`.
 - `home.html` — Home. Cinematic hero + rails. Chosen direction.
-- `yours.html` — Yours. Identity, shelf, stickers, library, downloads, appearance.
 - `b-console.html` — rejected as a homepage, kept for reference: its sidebar source-health
   treatment is where the top-bar health chip came from.
-
-Known rough edges: the shelf nudge buttons collide with a sticker at default placement
-(stickers are user-draggable, so possibly moot).
 
 ## Open questions
 

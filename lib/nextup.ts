@@ -1,10 +1,10 @@
-/** Credits window before autoplay. Short enough to feel like TV, long enough to cancel. */
+/** Keep this window for validating a real media end; never use catalog runtime as a trigger. */
 export const NEXT_UP_SECONDS = 15;
 
 /**
- * Seconds left on the next-episode countdown, or null when the overlay stays hidden.
- * Failed remuxes end the media element too — `watchedSeconds` and a real duration
- * are what keep those from looking like "episode finished".
+ * Zero after a credible media end, or null when the overlay stays hidden.
+ * Catalog runtimes are estimates, so using one to open this during playback can
+ * interrupt a longer episode. A failed remux must also not look finished.
  */
 export function nextUpCountdown(opts: {
   position: number;
@@ -15,11 +15,9 @@ export function nextUpCountdown(opts: {
   hasNext: boolean;
 }): number | null {
   if (!opts.hasNext || opts.cancelled || opts.watchedSeconds < 30) return null;
-  if (opts.ended) return 0;
   if (opts.duration == null || opts.duration < 90) return null;
-  const left = opts.duration - opts.position;
-  if (left > NEXT_UP_SECONDS || left < 0) return null;
-  return Math.max(1, Math.ceil(left));
+  if (!opts.ended || opts.position < opts.duration - NEXT_UP_SECONDS) return null;
+  return 0;
 }
 
 /** `"off"` ↔ last chosen cue. Same key Netflix binds to C. */

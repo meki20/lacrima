@@ -1,15 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { pushProgress, type ProgressWrite } from "@/lib/progress-write";
+import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { type DockEpisode } from "@/lib/nav";
+import { isChapterRead, pushProgress, type ProgressWrite } from "@/lib/progress-write";
+import MarkMenu from "./MarkMenu";
+import { DEFAULT_READER, parseReaderPrefs, tapZone, type ReaderPrefs } from "@/lib/reader-prefs";
 import { useRouter } from "next/navigation";
 
-type Mode = "paged" | "webtoon";
-type Fit = "height" | "width" | "contain";
-type Spread = "single" | "double";
-type Prefs = { mode: Mode; rtl: boolean; fit: Fit; spread: Spread };
+type Prefs = ReaderPrefs;
 
-const DEFAULT: Prefs = { mode: "paged", rtl: false, fit: "height", spread: "single" };
 const GLOBAL = "lacrima.reader";
 const PRELOAD = 2;
 
@@ -24,6 +23,9 @@ export type ReaderProps = {
   progress: ProgressWrite;
   /** via:id — prefs stick to the series, not the chapter. */
   settingsKey: string;
+  defaults?: Prefs;
+  chapters?: DockEpisode[];
+  currentId?: string;
 };
 
 export default function Reader({
@@ -36,25 +38,35 @@ export default function Reader({
   nextHref,
   progress,
   settingsKey,
+  defaults = DEFAULT_READER,
+  chapters = [],
+  currentId,
 }: ReaderProps) {
   const router = useRouter();
   const store = `${GLOBAL}.${settingsKey}`;
   const [page, setPage] = useState(() => clamp(initialPage, pages.length));
-  const [prefs, setPrefs] = useState<Prefs>(DEFAULT);
+  const [prefs, setPrefs] = useState<Prefs>(defaults);
   const [ready, setReady] = useState(false);
   const [chrome, setChrome] = useState(true);
   const [menu, setMenu] = useState(false);
   const [drag, setDrag] = useState(false);
   const strip = useRef<HTMLDivElement>(null);
+  const chaptersEl = useRef<HTMLDivElement>(null);
+  const tap0 = useRef<{ id: number; x: number; y: number } | null>(null);
   const suppressObserver = useRef(false);
   const { mode, rtl, fit, spread } = prefs;
   const paged = mode === "paged";
   const double = paged && spread === "double";
   const stride = double ? 2 : 1;
   const shown = double ? [page, page + 1].filter((i) => i < pages.length) : [page];
+  const currentChapter = chapters.findIndex((c) => c.id === currentId);
+  const [readUnit, setReadUnit] = useState(progress.unit);
+  useEffect(() => {
+    setReadUnit(progress.unit);
+  }, [progress.unit, progress.chapterId]);
 
   useEffect(() => {
-    setPrefs(readPrefs(store));
+    setPrefs(readPrefs(store, defaults));
     setReady(true);
   }, [store]);
 
@@ -83,6 +95,37 @@ export default function Reader({
     }, 700);
     return () => clearTimeout(t);
   }, [page, progress]);
+
+  const progressRef = useRef(progress);
+  progressRef.current = progress;
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  useEffect(() => {
+    let last = Date.now();
+    const id = setInterval(() => {
+      if (document.visibilityState !== "visible") {
+        last = Date.now();
+        return;
+      }
+      const now = Date.now();
+      const delta = Math.min(8, Math.round((now - last) / 1000));
+      last = now;
+      if (delta < 1) return;
+      const p = progressRef.current;
+      pushProgress({
+        ...p,
+        watchedDelta: delta,
+        anchor: {
+          kind: "page",
+          index: pageRef.current,
+          chapterId: p.chapterId,
+          chapterName: p.chapterName,
+          ...(p.pages && p.pages > 0 ? { pages: p.pages } : {}),
+        },
+      });
+    }, 5_000);
+    return () => clearInterval(id);
+  }, []);
 
   const goPage = useCallback(
     (next: number) => {
@@ -169,11 +212,47 @@ export default function Reader({
       }
       e.preventDefault();
       e.stopPropagation();
-      if (el instanceof HTMLElement && el.closest(".zone, .reader-slit")) el.blur();
+      if (el instanceof HTMLElement && el.closest(".reader-slit")) el.blur();
     }
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [backHref, goPage, menu, paged, pages.length, router, rtl, step]);
+
+  useEffect(() => {
+    if (!menu) return;
+    const box = chaptersEl.current;
+    const on = box?.querySelector<HTMLElement>("a.on");
+    if (!box || !on) return;
+    const top = on.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+    box.scrollTop = top - (box.clientHeight - on.offsetHeight) / 2;
+  }, [menu, currentId]);
+
+  const openMenu = useCallback(() => {
+    setMenu(true);
+    setChrome(true);
+  }, []);
+
+  const onTapDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    tap0.current = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  };
+
+  const onTapUp = (e: PointerEvent<HTMLDivElement>) => {
+    const start = tap0.current;
+    tap0.current = null;
+    if (!start || start.id !== e.pointerId) return;
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 24) return;
+    if ((e.target as HTMLElement).closest("a, button, input, .pbtn")) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const z = tapZone(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
+    if (z === "top") openMenu();
+    else if (z === "left") step(rtl ? 1 : -1);
+    else if (z === "right") step(rtl ? -1 : 1);
+    else {
+      setChrome((v) => !v);
+      setMenu(false);
+    }
+  };
 
   const t = pages.length > 1 ? page / (pages.length - 1) : 1;
   const visible = chrome || menu;
@@ -228,6 +307,11 @@ export default function Reader({
           data-fit={fit}
           data-spread={double ? "double" : "single"}
           data-rtl={rtl ? "" : undefined}
+          onPointerDown={onTapDown}
+          onPointerUp={onTapUp}
+          onPointerCancel={() => {
+            tap0.current = null;
+          }}
         >
           {shown.map((i) => (
             <img
@@ -241,45 +325,30 @@ export default function Reader({
           {pages.slice(page + shown.length, page + shown.length + PRELOAD).map((src) => (
             <img key={src} src={src} alt="" style={{ display: "none" }} />
           ))}
-          <button
-            className="zone left"
-            tabIndex={-1}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => step(rtl ? 1 : -1)}
-            aria-label={rtl ? "Next page" : "Previous page"}
-          />
-          <button
-            className="zone mid"
-            tabIndex={-1}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              setChrome((v) => !v);
-              setMenu(false);
-            }}
-            aria-label="Toggle controls"
-          />
-          <button
-            className="zone right"
-            tabIndex={-1}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => step(rtl ? -1 : 1)}
-            aria-label={rtl ? "Previous page" : "Next page"}
-          />
         </div>
       ) : (
-        <div className="reader-strip" ref={strip}>
-          {pages.map((src, i) => (
-            <img
-              key={src}
-              data-i={i}
-              className="reader-img"
-              src={src}
-              alt={`Page ${i + 1}`}
-              loading={i <= PRELOAD ? "eager" : "lazy"}
-              decoding="async"
-              draggable={false}
-            />
-          ))}
+        <div
+          className="reader-webtoon"
+          onPointerDown={onTapDown}
+          onPointerUp={onTapUp}
+          onPointerCancel={() => {
+            tap0.current = null;
+          }}
+        >
+          <div className="reader-strip" ref={strip}>
+            {pages.map((src, i) => (
+              <img
+                key={src}
+                data-i={i}
+                className="reader-img"
+                src={src}
+                alt={`Page ${i + 1}`}
+                loading={i <= PRELOAD ? "eager" : "lazy"}
+                decoding="async"
+                draggable={false}
+              />
+            ))}
+          </div>
         </div>
       )}
 
@@ -337,6 +406,52 @@ export default function Reader({
             </Opt>
           </div>
         </div>
+        {chapters.length > 0 && (
+          <div className="reader-group reader-chapters-box">
+            <b>Chapters</b>
+            <div className="reader-chapters" ref={chaptersEl}>
+              {chapters.map((c, i) => {
+                const read = isChapterRead(i, currentChapter, readUnit);
+                const write = (extra: { skipAhead?: boolean; exact?: boolean }, unit = i + 1) => {
+                  const target = unit > 0 ? chapters[unit - 1] ?? c : c;
+                  return pushProgress({
+                    ...progress,
+                    unit,
+                    chapterId: target.id,
+                    chapterName: target.name,
+                    ...extra,
+                  }).then(() => {
+                    setReadUnit((u) => (extra.exact ? unit : Math.max(u, unit)));
+                  });
+                };
+                return (
+                  <div
+                    key={c.id}
+                    className={`reader-chapter${c.id === currentId ? " on" : ""}${read ? " read" : ""}`}
+                  >
+                    <a
+                      href={c.href}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        void write({ skipAhead: true }).then(() => router.push(c.href));
+                      }}
+                    >
+                      <span className="mono">{c.number}</span>
+                      <span className="name">{c.name}</span>
+                    </a>
+                    <MarkMenu
+                      kind={progress.kind}
+                      read={i + 1 <= readUnit}
+                      onMark={() => void write({ skipAhead: true })}
+                      onUpTo={() => void write({ exact: true })}
+                      onUnmark={() => void write({ exact: true }, i)}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </aside>
 
       <div className={`reader-slit${drag ? " drag" : ""}`} data-rtl={rtl ? "" : undefined} style={{ ["--t" as string]: t }}>
@@ -432,19 +547,8 @@ const PATH = {
   double: "M3 5h8v14H3zM13 5h8v14h-8",
 };
 
-function readPrefs(store: string): Prefs {
-  try {
-    const raw = localStorage.getItem(store) ?? localStorage.getItem(GLOBAL) ?? "{}";
-    const s = JSON.parse(raw) as Partial<Prefs>;
-    return {
-      mode: s.mode === "webtoon" ? "webtoon" : "paged",
-      rtl: s.rtl === true,
-      fit: s.fit === "width" || s.fit === "contain" ? s.fit : "height",
-      spread: s.spread === "double" ? "double" : "single",
-    };
-  } catch {
-    return DEFAULT;
-  }
+function readPrefs(store: string, fallback: Prefs): Prefs {
+  return parseReaderPrefs(localStorage.getItem(store) ?? localStorage.getItem(GLOBAL) ?? JSON.stringify(fallback));
 }
 
 const clamp = (i: number, len: number) => Math.min(Math.max(i, 0), Math.max(0, len - 1));

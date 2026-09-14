@@ -12,7 +12,7 @@
   --tx3: #7a6e64;
 
   /* --accent is overridden per profile at the root; everything derived follows it. */
-  --accent: #c44532;
+  --accent: #630E19;
   --accent-dim: color-mix(in srgb, var(--accent) 16%, transparent);
   --highlight: #e8c56b;
   --warn: #e8c56b;
@@ -95,7 +95,7 @@ h3 { font-size: 14px; }
 /* poster placeholders */
 .poster {
   aspect-ratio: 2 / 3; border-radius: var(--r-card);
-  border: 1px solid var(--border);
+  border: 0;
   display: flex; align-items: flex-end; padding: 10px;
   font-size: 12px; line-height: 1.3; font-weight: 500;
   color: rgba(255, 255, 255, 0.92); overflow: hidden;

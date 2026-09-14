@@ -30,6 +30,7 @@ export type CachedPick = {
   url: string;
   provider: string;
   hint?: string;
+  subtitles?: Lang[];
   kind: "torrent" | "http";
   ih?: string;
   fileIdx?: number | null;
@@ -201,12 +202,24 @@ export function promotePart(ctx: CacheCtx, expected: number | null) {
 }
 
 /** Adopt a torrent file that has finished downloading, so a rewatch needs no peers. */
-export function adoptCompleted(ctx: CacheCtx, src: string) {
+export function adoptCompleted(ctx: CacheCtx, src: string, replace = false) {
   const video = videoPath(ctx);
-  if (existsSync(video) || !existsSync(src)) return;
+  if ((!replace && existsSync(video)) || !existsSync(src)) return;
   try {
     ensureMediaDir(ctx);
-    linkSync(src, video);
+    const next = `${video}.next`;
+    const old = `${video}.old`;
+    if (existsSync(next)) unlinkSync(next);
+    if (existsSync(old)) unlinkSync(old);
+    linkSync(src, next);
+    if (existsSync(video)) renameSync(video, old);
+    try {
+      renameSync(next, video);
+      if (existsSync(old)) unlinkSync(old);
+    } catch (error) {
+      if (existsSync(old) && !existsSync(video)) renameSync(old, video);
+      throw error;
+    }
     forget(ctx);
   } catch {
     /* different volume — WebTorrent still has it, and the store is kept */
@@ -260,6 +273,7 @@ function pickFromStreamPick(groupId: string, pick: StreamPick): CachedPick {
     url: pick.url,
     provider: pick.provider,
     hint: pick.hint,
+    subtitles: pick.subtitles,
     kind,
     committedAt: Date.now(),
     v: RANK_VERSION,
@@ -300,7 +314,7 @@ function parseGroupId(id: string): { quality: Quality; lang: Lang } {
 }
 
 export function pickToStreamPick(entry: CachedPick): StreamPick {
-  return { url: relayUrl(entry), provider: entry.provider, hint: entry.hint };
+  return { url: relayUrl(entry), provider: entry.provider, hint: entry.hint, subtitles: entry.subtitles };
 }
 
 /** Reorder picks so a previously confirmed stream is tried first. */

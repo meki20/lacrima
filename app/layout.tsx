@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Suspense } from "react";
 import { currentProfile } from "@/lib/profile";
+import StickerDecor from "@/components/StickerDecor";
+import StickerToasts from "@/components/StickerToasts";
 import "./globals.css";
 
 const sans = Geist({ subsets: ["latin"], weight: ["400", "500"], variable: "--geist-sans" });
@@ -28,6 +31,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           grammarly-*). Nothing we render here is client-dependent. */}
       <body suppressHydrationWarning style={{ ["--accent" as string]: me.accent }}>
         {children}
+        <Suspense fallback={null}>
+          <StickerDecor />
+        </Suspense>
+        <Suspense fallback={null}>
+          <StickerToasts />
+        </Suspense>
       </body>
     </html>
   );

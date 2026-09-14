@@ -1,7 +1,8 @@
-import type { Lang } from "../audio.ts";
+import { subtitleLangs, type Lang } from "../audio.ts";
 import { animeIds, nativeIds, type AnimeIds } from "../anime-ids.ts";
 import { dedupeCues, toCue, type SubCue } from "../subs.ts";
 import { ensureSubFiles, loadSubIndex, saveSubIndex } from "../sub-cache.ts";
+import { embeddedSubtitles } from "../embedded-subs.ts";
 import type { CacheCtx } from "../play-cache-client.ts";
 import {
   browserPlayable,
@@ -794,6 +795,7 @@ function playlistFrom(bags: Bag[], want?: Slot, prefer?: Lang, title?: string): 
         described: Boolean(s.title || s.description || file),
         sameWork: sameWork(file, title),
         exactSlot: namesSlot(streamText(s), want),
+        subtitles: subtitleLangs(streamText(s)),
       });
     }
   }
@@ -886,12 +888,17 @@ const inflight = new Map<string, Promise<Result<Playlist>>>();
 
 export async function resolveStreams(
   chapterId: string,
-  extras?: { via?: string; mediaId?: number; lang?: Lang; title?: string },
+  extras?: { via?: string; mediaId?: number; lang?: Lang; title?: string; fresh?: boolean },
 ): Promise<Result<Playlist>> {
   const lang = extras?.lang;
   const key = `${RANK_VERSION}|${chapterId}|${extras?.via ?? ""}|${extras?.mediaId ?? ""}`;
-  const hit = cached(key);
+  const hit = extras?.fresh ? null : cached(key);
   if (hit) return Ok(forLang(hit, lang));
+
+  if (extras?.fresh) {
+    const r = await resolveUncached(chapterId, key, extras);
+    return r.ok ? Ok(forLang(r.value, lang)) : r;
+  }
 
   let run = inflight.get(key);
   if (!run) {
@@ -906,7 +913,7 @@ export async function resolveStreams(
 async function resolveUncached(
   chapterId: string,
   key: string,
-  extras?: { via?: string; mediaId?: number; lang?: Lang; title?: string },
+  extras?: { via?: string; mediaId?: number; lang?: Lang; title?: string; fresh?: boolean },
 ): Promise<Result<Playlist>> {
   const [boundId, id] = split(chapterId);
   const lang = extras?.lang;
@@ -1049,10 +1056,15 @@ export async function resolveSubtitles(
   if (extras?.fresh) {
     subtitles.delete(key);
   } else if (ctx) {
-    const disk = loadSubIndex(ctx);
-    if (disk.length) {
-      void ensureSubFiles(ctx, disk);
-      return Ok(disk);
+    /* Embedded cues are tied to one exact cached video. Re-probe those instead
+       of retaining tracks extracted from a source that has since been replaced. */
+    const disk = loadSubIndex(ctx).filter((cue) => !cue.url.startsWith("embedded:"));
+    const local = await embeddedSubtitles(ctx);
+    const all = dedupeCues([...local, ...disk]);
+    if (all.length) {
+      if (local.length) saveSubIndex(ctx, all);
+      void ensureSubFiles(ctx, all);
+      return Ok(all);
     }
   }
 
@@ -1075,7 +1087,11 @@ export async function resolveSubtitles(
     subInflight.set(key, run);
     void run.catch(() => undefined).finally(() => subInflight.delete(key));
   }
-  return await run;
+  const result = await run;
+  if (!result.ok || !ctx) return result;
+  const all = dedupeCues([...await embeddedSubtitles(ctx), ...result.value]);
+  if (all.length) saveSubIndex(ctx, all);
+  return Ok(all);
 }
 
 async function resolveSubtitlesUncached(
@@ -1122,6 +1138,10 @@ async function resolveSubtitlesUncached(
     clearTimeout(hard);
     ac.abort();
   }
+}
+
+export function resolveEmbeddedSubtitles(ctx: CacheCtx): Promise<SubCue[]> {
+  return embeddedSubtitles(ctx);
 }
 
 export const stremio: SourceBackend = {

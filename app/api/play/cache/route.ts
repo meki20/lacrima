@@ -1,4 +1,6 @@
 import { commitPick, type CacheCtx } from "@/lib/play-cache";
+import { currentProfile } from "@/lib/profile";
+import { recordProviderChoice } from "@/lib/settings";
 import type { StreamPick } from "@/lib/streams";
 
 export const dynamic = "force-dynamic";
@@ -22,5 +24,6 @@ export async function POST(req: Request) {
     return Response.json({ error: "Missing fields" }, { status: 400 });
   }
   const entry = commitPick({ via, mediaId, chapterId }, groupId, pick);
+  recordProviderChoice((await currentProfile()).id, pick.provider);
   return Response.json({ ok: true, committedAt: entry.committedAt });
 }

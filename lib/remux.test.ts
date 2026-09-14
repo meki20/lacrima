@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { playFileArgs, remuxArgs } from "./remux.ts";
+import { playFileArgs, remuxArgs, subtitleTracksFromProbe } from "./remux.ts";
 
 const at = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
 const maps = (args: string[]) =>
@@ -26,13 +26,14 @@ test("the requested language is required so a wrong track cannot silently play",
   ]);
 });
 
-test("video is always copied and audio is copied when it is already AAC", () => {
+test("an episode start copies video and ffmpeg writes one normalized output timeline", () => {
   const args = remuxArgs("http://relay/x", { lang: "ja" });
   assert.equal(at(args, "-c:v"), "copy", "video must never be re-encoded");
   assert.equal(at(args, "-c:a"), "aac");
   assert.equal(args.includes("-af"), false);
-  assert.equal(args.includes("-copyts"), true);
-  assert.equal(at(args, "-avoid_negative_ts"), "disabled");
+  assert.equal(args.includes("-copyts"), false);
+  assert.equal(args.includes("-start_at_zero"), false);
+  assert.equal(args.includes("-avoid_negative_ts"), false);
   assert.equal(args.includes("-bsf:v"), false);
   assert.equal(at(args, "-disposition:a:0"), "default");
   assert.equal(at(args, "-f"), "mp4");
@@ -51,6 +52,8 @@ test("a seek is applied before the input, so it is a seek and not a wait", () =>
   const i = args.indexOf("-i");
   assert.ok(ss > -1 && ss < i, "-ss must precede -i for keyframe seeking");
   assert.equal(at(args, "-ss"), "578");
+  assert.equal(at(args, "-c:v"), "libx264", "a copied GOP would precede the re-encoded audio");
+  assert.equal(at(args, "-preset"), "veryfast");
 
   // No seek at the start of an episode: the flag is absent, not "0".
   assert.equal(remuxArgs("http://relay/x", { lang: "ja" }).includes("-ss"), false);
@@ -77,4 +80,15 @@ test("a referer is passed through, because sources hotlink-block", () => {
     remuxArgs("C:/cache/video", { lang: "ja", referer: "https://src.example/" }).includes("-headers"),
     false,
   );
+});
+
+test("subtitle probing keeps track metadata and ignores other streams", () => {
+  assert.deepEqual(
+    subtitleTracksFromProbe(JSON.stringify({ streams: [
+      { index: 0, codec_type: "video", codec_name: "h264" },
+      { index: 2, codec_type: "subtitle", codec_name: "ass", tags: { language: "eng", title: "Full" } },
+    ] })),
+    [{ index: 2, codec: "ass", language: "eng", title: "Full" }],
+  );
+  assert.deepEqual(subtitleTracksFromProbe("bad json"), []);
 });

@@ -164,7 +164,7 @@ its name from any page.
 ## Phase 4 — Yours
 
 Who you are and what you own. Grids, not rails. Nothing here duplicates Home — Continue and
-the rails stay there; the library grid and identity live only here. Mockup: `mockups/yours.html`.
+the rails stay there; the library grid and identity live only here.
 
 ### Household
 
@@ -188,26 +188,14 @@ the rails stay there; the library grid and identity live only here. Mockup: `moc
 - ~10 titles, height locked to the tile beside it.
 - Overflow scrolls horizontally by **both** gesture and buttons.
 
-### Characters
-
-Favourite characters, pulled from the metadata provider, kept per profile.
-
 ### Stickers
 
-Steam-achievement energy — collectible, not decorative.
-
-- Earn rules (finish a series, read N chapters, a streak, first novel, and so on).
-- Collection view where **locked stickers stay visible as dashed empty slots**.
-- Drag to place onto the UI and onto the library; placement persisted per profile.
-
-### Appearance
-
-- Accent picker and wallpaper, per profile, applied at the document root.
-- Banners per title where the metadata provides one.
+A page of their own (`/stickers`), not a tile on Yours. Stickers are characters earned by
+watching a series. Locked slots stay visible once the collection exists.
 
 ### Downloads
 
-The list and its quota live here; the download machinery itself is Phase 7.
+The list lives here, uncapped. The download machinery itself is Phase 7.
 
 **Done when:** the Yours page is real and your profile looks like yours, not like the default.
 
@@ -249,8 +237,8 @@ second, with subtitles.
 
 Roughly parallel, each independently shippable.
 
-- **Downloads and offline.** PWA, page and chapter caching to IndexedDB, per-profile quota,
-  eviction policy. Covers must-have 6.
+- **Downloads and offline.** PWA, page and chapter caching to IndexedDB, uncapped.
+  Covers must-have 6.
 - **Scanlation ad hiding.** Perceptual hash per page, user marks one as ad/credits, every
   match auto-hides server-wide. No ML — scan groups reuse the same credit image across
   hundreds of chapters. Covers must-not A.

@@ -95,6 +95,7 @@ async function request<T>(query: string, variables?: object): Promise<Result<T>>
         "user-agent": "Lacrima/0.1 (self-hosted)",
       },
       body: JSON.stringify({ query, variables }),
+      cache: "force-cache",
       next: { revalidate: 1800 },
       signal: AbortSignal.timeout(4_000),
     });

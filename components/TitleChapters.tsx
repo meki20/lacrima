@@ -1,8 +1,11 @@
 import { revalidatePath } from "next/cache";
 import EpisodeList from "@/components/EpisodeList";
+import ChapterList from "@/components/ChapterList";
 import type { Binding } from "@/lib/match";
 import type { MediaKind } from "@/lib/media";
+import type { ProgressWrite } from "@/lib/progress-write";
 import { chaptersFor } from "@/lib/resolve";
+import { windowEpisodes } from "@/lib/series";
 
 export default async function TitleChapters({
   binding,
@@ -10,6 +13,8 @@ export default async function TitleChapters({
   via,
   id,
   readingId,
+  readUnit,
+  progress,
   here,
   hideSeasonChips,
   seasonHint,
@@ -21,6 +26,8 @@ export default async function TitleChapters({
   via: string;
   id: number;
   readingId: string | null;
+  readUnit: number;
+  progress: Omit<ProgressWrite, "unit" | "chapterId" | "chapterName" | "pages">;
   here: string;
   hideSeasonChips?: boolean;
   seasonHint?: number | null;
@@ -44,53 +51,50 @@ export default async function TitleChapters({
     );
   }
 
+  const visible =
+    kind === "anime" && hideSeasonChips
+      ? windowEpisodes(chapters.value, episodeOffset ?? 0, episodeCount ?? null, seasonHint ?? null)
+      : chapters.value;
+  const missingSpecial = kind === "anime" && seasonHint === 0 && visible.length === 0;
+
   return (
     <section>
       <div className="row-h">
         <h2>{kind === "anime" ? "Episodes" : "Chapters"}</h2>
-        <span className="mono">{chapters.value.length} available</span>
+        <span className="mono">{visible.length} available</span>
         <form action={refresh} style={{ marginLeft: "auto" }}>
           <button className="btn" type="submit">
             Refresh
           </button>
         </form>
       </div>
-      {chapters.value.length === 0 ? (
+      {visible.length === 0 ? (
         <div className="empty">
-          <b>This source lists no chapters</b>
-          The entry exists but has nothing to {kind === "anime" ? "watch" : "read"} — often a
-          takedown. Try another match below.
+          <b>
+            {missingSpecial
+              ? "This source does not list this special"
+              : `This source lists no ${kind === "anime" ? "episodes" : "chapters"}`}
+          </b>
+          {missingSpecial
+            ? "The selected source only exposes the parent series. Try another match below."
+            : `The entry exists but has nothing to ${kind === "anime" ? "watch" : "read"} — often a takedown. Try another match below.`}
         </div>
       ) : kind === "anime" ? (
         <EpisodeList
-          episodes={chapters.value}
+          episodes={visible}
           readingId={readingId}
+          unit={readUnit}
+          progress={progress}
           base={`/read/${via}/${kind}/${id}/`}
-          hideSeasons={hideSeasonChips}
-          seasonHint={seasonHint}
-          episodeOffset={episodeOffset}
-          episodeCount={episodeCount}
+          indexOffset={kind === "anime" && hideSeasonChips ? episodeOffset ?? 0 : 0}
         />
       ) : (
-        <div className="rows scrollbox">
-          {chapters.value.map((c) => (
-            <a
-              className={`row${c.id === readingId ? " here" : ""}`}
-              key={c.id}
-              href={`/read/${via}/${kind}/${id}/${encodeURIComponent(c.id)}`}
-            >
-              <span className="mono" style={{ width: 56 }}>
-                {c.number}
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <h3>{c.name}</h3>
-                {c.scanlator && <span className="url">{c.scanlator}</span>}
-              </div>
-              {c.id === readingId && <span className="badge">reading</span>}
-              {c.pageCount ? <span className="badge">{c.pageCount}p</span> : null}
-            </a>
-          ))}
-        </div>
+        <ChapterList
+          chapters={visible}
+          readingId={readingId}
+          unit={readUnit}
+          progress={progress}
+        />
       )}
     </section>
   );

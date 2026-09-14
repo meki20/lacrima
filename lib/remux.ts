@@ -70,7 +70,14 @@ export function remuxArgs(
   else if (iso) args.push("-map", `0:a:m:language:${iso}`);
   else args.push("-map", "0:a:0?");
 
-  args.push("-c:v", "copy");
+  /* Input -ss lands on a preceding keyframe. Stream-copy keeps those video
+     frames while re-encoded audio starts at the requested time, so resumed
+     playback is visibly out of sync. Decode only a resumed video so ffmpeg's
+     normal accurate seek discards that GOP; an episode start stays a remux. */
+  if (opts.seek && opts.seek > 0) {
+    args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "18");
+  }
+  else args.push("-c:v", "copy");
   if (opts.copyAudio) {
     args.push("-c:a", "copy");
   } else {
@@ -78,10 +85,9 @@ export function remuxArgs(
   }
   args.push(
     "-disposition:a:0", "default",
-    /* Keep the file's timestamps so the player can read the keyframe `-ss`
-       actually landed on. Without this, every GOP is a different guessed offset. */
-    "-copyts",
-    "-avoid_negative_ts", "disabled",
+    /* Let ffmpeg start the new MP4 timeline at zero. Passing source timestamps
+       through (`-copyts`) made some MKV video tracks retain their offset while
+       the selected audio was encoded onto the new timeline. */
     "-muxdelay", "0",
     "-muxpreload", "0",
     "-movflags", "frag_keyframe+empty_moov+default_base_moof",
@@ -162,6 +168,79 @@ export function ensurePlayFile(
   });
   playJobs.set(dest, job);
   return job;
+}
+
+export type SubtitleTrack = {
+  index: number;
+  codec: string;
+  language?: string;
+  title?: string;
+};
+
+export function subtitleTracksFromProbe(raw: string): SubtitleTrack[] {
+  try {
+    const streams = (JSON.parse(raw) as {
+      streams?: {
+        index?: unknown;
+        codec_type?: string;
+        codec_name?: string;
+        tags?: { language?: string; title?: string };
+      }[];
+    }).streams ?? [];
+    return streams
+      .filter((s) => s.codec_type === "subtitle" && typeof s.index === "number")
+      .map((s) => ({
+        index: s.index as number,
+        codec: s.codec_name ?? "",
+        language: s.tags?.language,
+        title: s.tags?.title,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/** Text tracks inside a stable media file. Image subtitles are filtered by the caller. */
+export function probeSubtitleTracks(
+  url: string,
+  referer?: string | null,
+  signal?: AbortSignal,
+): Promise<SubtitleTrack[]> {
+  const http = /^https?:\/\//i.test(url);
+  const child = spawn(
+    FFPROBE,
+    [
+      "-v", "error",
+      ...(referer && http ? ["-headers", `Referer: ${referer}\r\n`] : []),
+      "-show_entries", "stream=index,codec_type,codec_name:stream_tags=language,title",
+      "-of", "json",
+      url,
+    ],
+    { windowsHide: true },
+  );
+  let stdout = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout = (stdout + chunk).slice(-64_000);
+  });
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (value: SubtitleTrack[]) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      resolve(value);
+    };
+    const abort = () => {
+      child.kill();
+      finish([]);
+    };
+    const timer = setTimeout(abort, 10_000);
+    signal?.addEventListener("abort", abort, { once: true });
+    child.on("error", () => finish([]));
+    child.on("close", (code) => finish(code === 0 ? subtitleTracksFromProbe(stdout) : []));
+  });
 }
 
 /** Select a stable source's requested track, accepting `und` only when it is alone. */

@@ -101,26 +101,19 @@ export function parseCues(text: string): TimedCue[] {
   return /^Dialogue:/m.test(src) ? parseAss(src) : parseBlocks(src);
 }
 
-/** A measured keyframe more than this far from `t` is a different clock. */
-const ORIGIN_GOP = 20;
-
 /**
  * Cue time for the frame on screen.
  *
- * Native files already clock in episode time. A remux pipe clocks from 0; use
- * the measured keyframe when we have one, otherwise `startAt + currentTime` so
- * a line still shows. Never feed this into seek — in-buffer seeks use `startAt`.
+ * Native files already clock in episode time. A remux pipe clocks from 0, and
+ * accurate resumed remuxes now begin exactly at `startAt`.
  */
 export function remuxEpisodeTime(
   startAt: number,
   currentTime: number,
   native: boolean,
-  origin?: number | null,
 ): number {
   if (native) return currentTime;
-  const base =
-    origin != null && origin >= 1 && Math.abs(origin - startAt) < ORIGIN_GOP ? origin : startAt;
-  return Math.max(0, base + currentTime);
+  return Math.max(0, startAt + currentTime);
 }
 
 export function cueAt(cues: TimedCue[], at: number): TimedCue | null {

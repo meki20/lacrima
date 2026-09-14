@@ -174,6 +174,24 @@ test("English sub is Japanese audio; English dub is English", () => {
   assert.ok(groups.find((g) => g.lang === "en")?.picks.some((p) => p.url === "/api/stream?ih=dub"));
 });
 
+test("Japanese playback prefers and records an advertised English subtitle track", () => {
+  const { groups } = present([
+    {
+      text: "🌐 1080p 🔊 aac · 🇯🇵 💬 🇫🇷 👤 200 Re.Zero.S04E13",
+      url: "/api/stream?ih=fr",
+      provider: "A",
+    },
+    {
+      text: "🌐 1080p 🔊 aac · 🇯🇵 💬 🇺🇸 👤 180 Re.Zero.S04E13",
+      url: "/api/stream?ih=en",
+      provider: "A",
+    },
+  ]);
+  const picks = groups.find((g) => g.lang === "ja")!.picks;
+  assert.equal(picks[0].url, "/api/stream?ih=en");
+  assert.deepEqual(picks[0].subtitles, ["en"]);
+});
+
 test("a Hindi multi-dub appears in every language it actually carries", () => {
   /* The relay picks the audio track, so this file legitimately serves Hindi,
      English and Japanese. Hiding it from two of them lost the only working

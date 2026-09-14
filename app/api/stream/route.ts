@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { PLAYLIST_TYPE, isPlaylist, rewritePlaylist } from "@/lib/hls";
 import { mimeForPath, playableType, readFileRange } from "@/lib/local-video";
-import { parseLang } from "@/lib/audio";
-import { ensurePlayFile, probeAudio, remuxStream } from "@/lib/remux";
+import { parseLang, parseLangToken, type Lang } from "@/lib/audio";
+import { ensurePlayFile, probeAudio, probeSubtitleTracks, remuxStream } from "@/lib/remux";
 import {
   adoptCompleted,
   cachedFileStat,
@@ -118,14 +118,15 @@ function adoptWhenComplete(
   ctx: CacheCtx | null,
   ih: string,
   file: { path: string },
+  replace = false,
 ) {
-  if (!ctx || hasVideo(ctx)) return;
-  const key = `${ctx.via}|${ctx.mediaId}|${ctx.chapterId}|${ih}`;
+  if (!ctx || (!replace && hasVideo(ctx))) return;
+  const key = `${ctx.via}|${ctx.mediaId}|${ctx.chapterId}|${ih}|${replace}`;
   if (adopting.has(key)) return;
   adopting.add(key);
   onSelectedComplete(ih, () => {
     adopting.delete(key);
-    adoptCompleted(ctx, join(torrentStore(ctx.via, ctx.mediaId), file.path));
+    adoptCompleted(ctx, join(torrentStore(ctx.via, ctx.mediaId), file.path), replace);
   });
 }
 
@@ -162,11 +163,12 @@ function fileResponse(req: Request, path: string) {
 
 async function fromTorrent(req: Request, ih: string, idx: string | null, ctx: CacheCtx | null) {
   if (!isInfoHash(ih)) return new Response("Bad info hash", { status: 400 });
-  if (ctx) {
+  const q = new URL(req.url).searchParams;
+  const replace = q.get("replace") === "1";
+  if (ctx && !replace) {
     const cached = cachedResponse(req, ctx);
     if (cached) return cached;
   }
-  const q = new URL(req.url).searchParams;
   const store = ctx ? torrentStore(ctx.via, ctx.mediaId) : undefined;
   try {
     const file = await torrentFile(
@@ -175,7 +177,7 @@ async function fromTorrent(req: Request, ih: string, idx: string | null, ctx: Ca
       wantSlot(q),
       store,
     );
-    adoptWhenComplete(ctx, ih, file);
+    adoptWhenComplete(ctx, ih, file, replace);
     return streamFile(req, file);
   } catch (e) {
     return new Response(e instanceof Error ? e.message : "Torrent failed", { status: 502 });
@@ -190,22 +192,23 @@ async function fromTorrentRace(
   for (const { ih } of pairs) {
     if (!isInfoHash(ih)) return new Response("Bad info hash", { status: 400 });
   }
-  if (ctx) {
+  const q = new URL(req.url).searchParams;
+  const replace = q.get("replace") === "1";
+  if (ctx && !replace) {
     const cached = cachedResponse(req, ctx);
     if (cached) return cached;
   }
-  const q = new URL(req.url).searchParams;
   const store = ctx ? torrentStore(ctx.via, ctx.mediaId) : undefined;
   const tryN = raceTry(q);
   if (tryN > 0) {
     const hit = pickFromRacePool(pairs, tryN, wantSlot(q), store);
     if (!hit) return new Response("No warm race candidates left", { status: 502 });
-    adoptWhenComplete(ctx, hit.ih, hit.file);
+    adoptWhenComplete(ctx, hit.ih, hit.file, replace);
     return streamFile(req, hit.file);
   }
   try {
     const { ih, file } = await raceTorrentFiles(pairs, wantSlot(q), undefined, store);
-    adoptWhenComplete(ctx, ih, file);
+    adoptWhenComplete(ctx, ih, file, replace);
     return streamFile(req, file);
   } catch (e) {
     return new Response(e instanceof Error ? e.message : "Torrent race failed", { status: 502 });
@@ -249,8 +252,9 @@ function teeHttp(
   ctx: CacheCtx,
   offset: number,
   total: number | null,
+  replace = false,
 ) {
-  if (offset !== 0 || total == null || hasVideo(ctx)) return body;
+  if (offset !== 0 || total == null || (!replace && hasVideo(ctx))) return body;
   ensureMediaDir(ctx);
   let fh: Awaited<ReturnType<typeof open>> | null = null;
   let written = 0;
@@ -338,6 +342,7 @@ async function httpUntilFirstByte(
   referer: string | null,
   ctx: CacheCtx | null,
   laneAbort: AbortSignal,
+  replace = false,
 ): Promise<Response> {
   let target: URL;
   try {
@@ -403,7 +408,7 @@ async function httpUntilFirstByte(
     },
   });
   if (ctx && upstream.ok) {
-    body = teeHttp(body, ctx, requestStart(req), totalBytes(upstream.headers));
+    body = teeHttp(body, ctx, requestStart(req), totalBytes(upstream.headers), replace);
   }
   return new Response(body, { status: upstream.status, headers: out });
 }
@@ -418,18 +423,19 @@ async function fromMixedRace(
   for (const { ih } of pairs) {
     if (!isInfoHash(ih)) return new Response("Bad info hash", { status: 400 });
   }
-  if (ctx) {
+  const q = new URL(req.url).searchParams;
+  const replace = q.get("replace") === "1";
+  if (ctx && !replace) {
     const cached = cachedResponse(req, ctx);
     if (cached) return cached;
   }
 
-  const q = new URL(req.url).searchParams;
   const store = ctx ? torrentStore(ctx.via, ctx.mediaId) : undefined;
   const tryN = raceTry(q);
   if (tryN > 0) {
     const hit = pickFromRacePool(pairs, tryN, wantSlot(q), store);
     if (!hit) return new Response("No warm race candidates left", { status: 502 });
-    adoptWhenComplete(ctx, hit.ih, hit.file);
+    adoptWhenComplete(ctx, hit.ih, hit.file, replace);
     return streamFile(req, hit.file);
   }
 
@@ -466,13 +472,13 @@ async function fromMixedRace(
         resolve(response);
       };
 
-      void httpUntilFirstByte(req, raw, referer, ctx, laneAbort.signal)
+      void httpUntilFirstByte(req, raw, referer, ctx, laneAbort.signal, replace)
         .then((r) => win(r, true))
         .catch(lose);
 
       void raceTorrentFiles(pairs, wantSlot(q), undefined, store)
         .then(({ ih, file }) => {
-          adoptWhenComplete(ctx, ih, file);
+          adoptWhenComplete(ctx, ih, file, replace);
           win(streamFile(req, file), false);
         })
         .catch(lose);
@@ -484,7 +490,8 @@ async function fromMixedRace(
 }
 
 async function fromHttp(req: Request, raw: string, referer: string | null, ctx: CacheCtx | null) {
-  if (ctx) {
+  const replace = new URL(req.url).searchParams.get("replace") === "1";
+  if (ctx && !replace) {
     const cached = cachedResponse(req, ctx);
     if (cached) return cached;
   }
@@ -546,7 +553,7 @@ async function fromHttp(req: Request, raw: string, referer: string | null, ctx: 
 
     let body: ReadableStream<Uint8Array> = upstream.body;
     if (ctx && upstream.ok) {
-      body = teeHttp(upstream.body, ctx, requestStart(req), totalBytes(upstream.headers));
+      body = teeHttp(upstream.body, ctx, requestStart(req), totalBytes(upstream.headers), replace);
     }
     return new Response(body, { status: upstream.status, headers: out });
   } catch {
@@ -566,10 +573,22 @@ async function fromHttp(req: Request, raw: string, referer: string | null, ctx: 
  * The response is a live pipe, so it carries no length and no byte ranges: seeking
  * re-requests with a new `t`, which restarts ffmpeg at that keyframe.
  */
+async function hasTextSubtitle(path: string, lang: Lang, signal: AbortSignal) {
+  const text = new Set(["ass", "ssa", "subrip", "webvtt", "mov_text", "text"]);
+  const tracks = await probeSubtitleTracks(path, null, signal);
+  return tracks.some(
+    (track) =>
+      text.has(track.codec) &&
+      (parseLangToken(track.language) === lang || parseLangToken(track.title) === lang),
+  );
+}
+
 async function fromRemux(req: Request, u: URL): Promise<Response> {
   const inner = new URL(u.toString());
+  const subtitle = parseLang(u.searchParams.get("sub")) ?? undefined;
   inner.searchParams.delete("remux");
   inner.searchParams.delete("lang");
+  inner.searchParams.delete("sub");
   inner.searchParams.delete("t");
   const lang = parseLang(u.searchParams.get("lang")) ?? undefined;
   const seek = Math.max(0, Number(u.searchParams.get("t") ?? 0) || 0);
@@ -604,7 +623,7 @@ async function fromRemux(req: Request, u: URL): Promise<Response> {
   if (lang && inner.searchParams.has("ih")) {
     const torrent = new URL(inner);
     for (const key of ["url", "referer", "hls"]) torrent.searchParams.delete(key);
-    for (const key of ["cv", "cm", "cc"]) torrent.searchParams.delete(key);
+    if (!subtitle) for (const key of ["cv", "cm", "cc"]) torrent.searchParams.delete(key);
     candidates.push(torrent);
   }
 
@@ -622,7 +641,14 @@ async function fromRemux(req: Request, u: URL): Promise<Response> {
   for (const candidate of candidates) {
     const candidateReferer = candidate.searchParams.get("referer");
     const candidateCtx = parseCacheCtx(candidate.searchParams);
-    const local = candidateCtx ? cachedFileStat(candidateCtx)?.path : null;
+    let local = candidateCtx ? cachedFileStat(candidateCtx)?.path ?? null : null;
+    if (local && subtitle && !(await hasTextSubtitle(local, subtitle, req.signal))) {
+      /* The saved release cannot satisfy the viewer's subtitle preference.
+         Stream the better-ranked source now and replace the cache only after
+         that source has downloaded completely. */
+      local = null;
+      candidate.searchParams.set("replace", "1");
+    }
     const input = local ?? candidate.toString();
     const probedAudio =
       lang && (local || candidate.searchParams.has("url"))

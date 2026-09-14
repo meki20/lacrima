@@ -9,27 +9,26 @@ import {
   type ComponentProps,
   type CSSProperties,
 } from "react";
-import { LANGS, parseLang, pickAudioTrack, type Lang } from "@/lib/audio";
+import { LANGS, pickAudioTrack, type Lang } from "@/lib/audio";
 import {
   cueAt,
   cueByChoice,
+  dedupeCues,
   fileHref,
   parseCues,
-  parseSubChoice,
   parseSubSync,
   pickSubLang,
   remuxEpisodeTime,
   SUB_SYNC_RANGE,
   SUB_SYNC_STEP,
   subSyncKey,
-  parseCaptionScale,
   captionScaleLabel,
   CAPTION_SCALES,
   type SubChoice,
   type SubCue,
   type TimedCue,
 } from "@/lib/subs";
-import { pushProgress, type ProgressWrite } from "@/lib/progress-write";
+import { pushProgress, usesSeriesTree, type ProgressWrite } from "@/lib/progress-write";
 import { withCacheParams } from "@/lib/play-cache-client";
 import { nextUpCountdown, toggleSubChoice } from "@/lib/nextup";
 import { dockSeasons, type DockEpisode } from "@/lib/nav";
@@ -60,7 +59,6 @@ import { mseSupported, useMseSrc } from "@/components/useMseSrc";
 import { useRouter } from "next/navigation";
 import {
   Controls,
-  FullscreenButton,
   Gesture,
   MediaPlayer,
   MediaProvider,
@@ -236,6 +234,7 @@ export default function Player({
   initialTime,
   durationSeconds,
   progress,
+  settings,
 }: {
   title: string;
   episodeLabel: string;
@@ -249,6 +248,7 @@ export default function Player({
   initialTime: number;
   durationSeconds: number | null;
   progress: ProgressWrite;
+  settings: { audio_lang: Lang; subtitle_lang: string; caption_scale: number };
 }) {
   const router = useRouter();
   const player = useRef<MediaPlayerInstance>(null);
@@ -271,11 +271,7 @@ export default function Player({
      Nothing language-dependent is rendered before the playlist lands, so the
      server's "ja" and the browser's saved value cannot disagree on screen. */
   const [lang, setLang] = useState<Lang>(() =>
-    typeof window === "undefined"
-      ? "ja"
-      : (parseLang(
-          localStorage.getItem("lacrima-lang") ?? localStorage.getItem("lacrima-audio"),
-        ) ?? "ja"),
+    settings.audio_lang,
   );
   /** Cached fast-path only returns one pick; bust it when that pick won't start. */
   const [bustCache, setBustCache] = useState(false);
@@ -294,12 +290,10 @@ export default function Player({
   const [subLoading, setSubLoading] = useState(true);
   const [subFresh, setSubFresh] = useState(0);
   const [subLang, setSubLang] = useState<SubChoice>(() =>
-    typeof window === "undefined"
-      ? "off"
-      : (parseSubChoice(localStorage.getItem("lacrima-subs")) ?? "off"),
+    settings.subtitle_lang,
   );
   const [captionScale, setCaptionScale] = useState(() =>
-    typeof window === "undefined" ? 1 : parseCaptionScale(localStorage.getItem("lacrima-caption-scale")),
+    settings.caption_scale,
   );
   /* MediaSource exists only in the browser. Wait one mount so SSR and the
      first client paint agree, then take the remux ourselves instead of
@@ -316,6 +310,8 @@ export default function Player({
   const committed = useRef<string | null>(null);
   const warmed = useRef(false);
   const playedFor = useRef(0);
+  const pendingWatch = useRef(0);
+  const lastWall = useRef(Date.now());
   const lastSub = useRef<string | null>(
     typeof window === "undefined" || subLang === "off" ? null : subLang,
   );
@@ -332,14 +328,19 @@ export default function Player({
   };
   const withCache = (url: string | null) =>
     url ? withCacheParams(url, cacheCtx) : null;
+  const saveSettings = (patch: Record<string, string | number>) =>
+    void fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).catch(() => {});
 
   const writeProgress = useCallback(
     (seconds: number) => {
       if (seconds <= 1) return;
       const duration = durationRef.current;
       const season = progress.season;
+      const delta = Math.min(30, Math.floor(pendingWatch.current));
+      pendingWatch.current = Math.max(0, pendingWatch.current - delta);
       pushProgress({
         ...progress,
+        ...(delta > 0 ? { watchedDelta: delta } : {}),
         anchor: {
           kind: "seconds",
           at: seconds,
@@ -347,11 +348,17 @@ export default function Player({
           chapterName: progress.chapterName,
           ...(duration && duration > 1 ? { duration } : {}),
           ...(season != null && season > 0 ? { season } : {}),
+          ...(progress.episode != null && progress.episode > 0 ? { episode: progress.episode } : {}),
         },
       });
     },
     [progress],
   );
+
+  useEffect(() => {
+    if ((progress.partIndex ?? 0) < 1 || !usesSeriesTree({ ...progress, skipAhead: true })) return;
+    void pushProgress({ ...progress, skipAhead: true });
+  }, [progress.mediaId, progress.partIndex]);
 
   useEffect(() => {
     gone.current = false;
@@ -465,11 +472,17 @@ export default function Player({
   }, [progress.chapterId, progress.via, progress.mediaId, subFresh]);
 
   const group = groups.find((g) => g.id === gid) ?? groups[0];
-  const { http: httpPicks, torrent: torrentPicks } = splitPicks(group?.picks ?? []);
+  const wantedSub: Lang | undefined =
+    settings.subtitle_lang !== "off" && group?.lang !== "en" ? "en" : undefined;
+  const matchingPicks = wantedSub
+    ? group?.picks.filter((p) => p.subtitles?.includes(wantedSub)) ?? []
+    : [];
+  const groupPicks = matchingPicks.length ? matchingPicks : group?.picks ?? [];
+  const { http: httpPicks, torrent: torrentPicks } = splitPicks(groupPicks);
   const pick =
     httpPicks[httpAt] ?? torrentPicks[torrentBatch * TORRENT_RACE_MAX];
   const solePick =
-    fromCache && group?.picks.length === 1 ? group.picks[0].url : null;
+    fromCache && groupPicks.length === 1 ? groupPicks[0].url : null;
   const raceBatchLen = Math.min(
     TORRENT_RACE_MAX,
     Math.max(0, torrentPicks.length - torrentBatch * TORRENT_RACE_MAX),
@@ -498,10 +511,13 @@ export default function Player({
     ),
     lang,
     startAt,
+    wantedSub,
   );
   const useMse = hydrated && Boolean(src?.includes("remux=1") && mseSupported());
   const mse = useMseSrc(useMse ? src : null);
-  const playSrc = !hydrated ? null : useMse && !mse.failed ? mse.url : src;
+  /* A remux HTTP error is final for this pick. Do not hand the exact same 502
+     URL to the native provider before selecting the next source. */
+  const playSrc = !hydrated ? null : mse.httpError != null ? null : useMse && !mse.failed ? mse.url : src;
 
   useEffect(() => {
     committed.current = null;
@@ -596,6 +612,10 @@ export default function Player({
 
   const failOverRef = useRef(failOver);
   failOverRef.current = failOver;
+
+  useEffect(() => {
+    if (useMse && mse.httpError != null) failOverRef.current("source-error");
+  }, [src, useMse, mse.httpError]);
 
   /* A torrent can answer with headers and then never send a byte, which the player
      reports as nothing at all. Without this the page just spins forever. */
@@ -779,12 +799,19 @@ export default function Player({
     if (!p) return;
     let last = -1;
     let lastWrite = 0;
+    lastWall.current = Date.now();
     /* A remuxed stream begins at `startAt`, so its clock starts at zero however
        far into the episode it actually is. Everything outside the player — the
        saved anchor, the next resume, the progress row — wants the real position. */
     const tick = setInterval(() => {
       const media = document.querySelector<HTMLVideoElement>(".player-root video");
       const currentTime = media?.currentTime ?? 0;
+      const wall = Date.now();
+      const dt = (wall - lastWall.current) / 1000;
+      lastWall.current = wall;
+      if (!media?.paused && currentTime > 0.2 && dt > 0 && dt < 2) {
+        pendingWatch.current += dt;
+      }
       if (currentTime > 1) {
         const absolute = native.current ? currentTime : startAt + currentTime;
         playedFor.current = Math.max(playedFor.current, currentTime);
@@ -834,6 +861,7 @@ export default function Player({
         setSubLang((cur) => {
           const next = toggleSubChoice(cur, lastSub.current);
           localStorage.setItem("lacrima-subs", next);
+          saveSettings({ subtitle_lang: next === "off" ? "off" : "auto" });
           return next;
         });
       } else {
@@ -855,9 +883,46 @@ export default function Player({
 
   useEffect(() => {
     if (subLoading) return;
-    const saved = parseSubChoice(localStorage.getItem("lacrima-subs"));
-    setSubLang(pickSubLang(cues, audioLang, saved));
-  }, [cues, subLoading, audioLang]);
+    setSubLang(pickSubLang(cues, audioLang, settings.subtitle_lang));
+  }, [cues, subLoading, audioLang, settings.subtitle_lang]);
+
+  /* The chosen torrent can carry the only matching subtitles. They become
+     extractable once its complete local copy lands, so keep looking briefly. */
+  useEffect(() => {
+    if (subLoading || !wantedSub || cues.some((c) => c.lang === wantedSub)) return;
+    let live = true;
+    let busy = false;
+    let attempts = 0;
+    const q = new URLSearchParams({
+      chapterId: String(progress.chapterId),
+      via: progress.via,
+      mediaId: String(progress.mediaId),
+      local: "1",
+    });
+    const find = async () => {
+      if (!live || busy || attempts++ >= 12) return;
+      busy = true;
+      try {
+        const r = await fetch(`/api/subs?${q}`);
+        const j = (await r.json()) as { cues?: SubCue[] };
+        if (!live || !r.ok || !j.cues?.length) return;
+        setCues((old) => {
+          const next = dedupeCues([...old, ...j.cues!]);
+          return next.length === old.length ? old : next;
+        });
+        if (j.cues.some((cue) => cue.lang === wantedSub)) clearInterval(timer);
+      } catch {
+        /* the normal external-subtitle result remains usable */
+      } finally {
+        busy = false;
+      }
+    };
+    const timer = setInterval(find, 5_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [subLoading, wantedSub, progress.chapterId, progress.via, progress.mediaId]);
 
   const [timed, setTimed] = useState<TimedCue[]>([]);
   const [subAt, setSubAt] = useState(initialTime);
@@ -893,17 +958,16 @@ export default function Player({
     };
   }, [activeCue?.url]);
 
-  /* Remux currentTime is relative to the keyframe `-ss` landed on, not `t`. */
+  /* Accurate remux seeks make currentTime relative to `startAt`. */
   useEffect(() => {
     const id = setInterval(() => {
       const currentTime =
         document.querySelector<HTMLVideoElement>(".player-root video")?.currentTime ?? 0;
-      const absolute =
-        remuxEpisodeTime(startAt, currentTime, native.current, mse.origin) - subSync;
+      const absolute = remuxEpisodeTime(startAt, currentTime, native.current) - subSync;
       setSubAt((old) => (Math.abs(old - absolute) < 0.04 ? old : absolute));
     }, 80);
     return () => clearInterval(id);
-  }, [src, startAt, subSync, mse.origin]);
+  }, [src, startAt, subSync]);
 
   useEffect(() => {
     if (subLang !== "off") lastSub.current = subLang;
@@ -1013,11 +1077,10 @@ export default function Player({
         /* A failed live remux ends its media element too. Never turn a zero-byte
            ffmpeg exit into "episode finished" and silently jump to the next one. */
         setEnded(true);
-        if (nextHref && playedFor.current >= 30 && !nextCancelled) router.push(nextHref);
       }}
     >
       <MediaProvider />
-      <Gesture className="player-gesture" event="pointerup" action="toggle:paused" />
+      <Gesture className="player-gesture" event="pointerup" action="toggle:controls" />
       {activeCue && <SubOverlay cues={timed} at={subAt} scale={captionScale} />}
 
       {err ? (
@@ -1083,6 +1146,12 @@ export default function Player({
           <a className="pbtn" href={backHref} aria-label="Back to title">
             <Icon d={PATH.arrow} filled={false} />
           </a>
+          <PlayerMeta
+            title={title}
+            episodeLabel={episodeLabel}
+            provider={sourceProvider}
+            revealKey={revealKey}
+          />
         </Controls.Group>
 
         <Controls.Group className="reader-bar bottom player-dock">
@@ -1119,13 +1188,6 @@ export default function Player({
               </div>
             </div>
 
-            <PlayerMeta
-              title={title}
-              episodeLabel={episodeLabel}
-              provider={sourceProvider}
-              revealKey={revealKey}
-            />
-
             <div className="player-side player-side-end">
               {groups.length > 0 && (
                 <DockMenu
@@ -1144,6 +1206,7 @@ export default function Player({
                   if (g) {
                       setLang(g.lang);
                       localStorage.setItem("lacrima-lang", g.lang);
+                      saveSettings({ audio_lang: g.lang });
                     }
                   }}
                   subLang={subLang}
@@ -1153,6 +1216,7 @@ export default function Player({
                   onPickSub={(choice) => {
                     setSubLang(choice);
                     localStorage.setItem("lacrima-subs", choice);
+                    saveSettings({ subtitle_lang: choice === "off" ? "off" : "auto" });
                   }}
                   subSync={subSync}
                   onSubSync={(n) => {
@@ -1164,21 +1228,20 @@ export default function Player({
                   onCaptionScale={(n) => {
                     setCaptionScale(n);
                     localStorage.setItem("lacrima-caption-scale", String(n));
+                    saveSettings({ caption_scale: n });
                   }}
                   onRefreshSubs={() => setSubFresh((n) => n + 1)}
                 />
               )}
               {episodes.length > 1 && (
-                <EpisodeDock episodes={episodes} currentId={currentId} />
+                <EpisodeDock episodes={episodes} currentId={currentId} progress={progress} />
               )}
               {nextHref && (
                 <a className="pbtn" href={nextHref} aria-label="Next episode">
                   <Icon d={PATH.next} />
                 </a>
               )}
-              <FullscreenButton className="pbtn">
-                <Icon d={PATH.full} filled={false} />
-              </FullscreenButton>
+              <PlayerFullscreen player={player} />
             </div>
           </div>
         </Controls.Group>
@@ -1229,6 +1292,7 @@ function DockMenu({
     qualities.length > 1 ? "quality" : langs.length > 1 ? "language" : "subs",
   );
   const ariaLabel = `Quality and language, ${selected.label}`;
+  const compactLabel = `${selected.quality} · ${selected.lang.toUpperCase()}`;
 
   useEffect(() => {
     if (!open) return;
@@ -1253,7 +1317,7 @@ function DockMenu({
         aria-label={ariaLabel}
         onClick={() => setOpen((v) => !v)}
       >
-        {selected.label}
+        {compactLabel}
       </IconBtn>
       {open && (
         <div className="player-lang-menu">
@@ -1428,7 +1492,15 @@ function DockMenu({
   );
 }
 
-function EpisodeDock({ episodes, currentId }: { episodes: DockEpisode[]; currentId?: string }) {
+function EpisodeDock({
+  episodes,
+  currentId,
+  progress,
+}: {
+  episodes: DockEpisode[];
+  currentId?: string;
+  progress: ProgressWrite;
+}) {
   const [open, setOpen] = useState(false);
   const seasons = dockSeasons(episodes);
   useEffect(() => {
@@ -1468,7 +1540,25 @@ function EpisodeDock({ episodes, currentId }: { episodes: DockEpisode[]; current
               <ul role="listbox" aria-label={s.label}>
                 {s.items.map((ep) => (
                   <li key={ep.id} role="option" aria-selected={ep.id === currentId}>
-                    <a className={ep.id === currentId ? "on" : undefined} href={ep.href}>
+                    <a
+                      className={ep.id === currentId ? "on" : undefined}
+                      href={ep.href}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        const i = episodes.findIndex((x) => x.id === ep.id);
+                        void pushProgress({
+                          ...progress,
+                          unit: i + 1,
+                          chapterId: ep.id,
+                          chapterName: ep.name,
+                          season: ep.season,
+                          episode: ep.number,
+                          skipAhead: true,
+                        }).then(() => {
+                          window.location.href = ep.href;
+                        });
+                      }}
+                    >
                       <span className="mono">E{ep.number}</span>
                       {ep.name}
                     </a>
@@ -1487,4 +1577,33 @@ function Volume() {
   const muted = useMediaState("muted");
   const volume = useMediaState("volume");
   return <Icon d={muted || volume === 0 ? PATH.mute : PATH.vol} filled={false} />;
+}
+
+function PlayerFullscreen({ player }: { player: { current: MediaPlayerInstance | null } }) {
+  const fullscreen = useMediaState("fullscreen");
+  return (
+    <button
+      type="button"
+      className="pbtn"
+      aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+      onClick={() => {
+        const video = document.querySelector<HTMLVideoElement>(".player-root video");
+        if (video?.webkitDisplayingFullscreen && video.webkitExitFullscreen) {
+          video.webkitExitFullscreen();
+          return;
+        }
+        if (video?.webkitSupportsFullscreen && video.webkitEnterFullscreen) {
+          video.webkitEnterFullscreen();
+          return;
+        }
+        if (document.fullscreenElement) {
+          void document.exitFullscreen().catch(() => {});
+          return;
+        }
+        void player.current?.enterFullscreen().catch(() => {});
+      }}
+    >
+      <Icon d={PATH.full} filled={false} />
+    </button>
+  );
 }

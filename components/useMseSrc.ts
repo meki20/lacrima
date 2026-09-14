@@ -98,22 +98,26 @@ async function append(sb: SourceBuffer, data: Uint8Array) {
 export function useMseSrc(remote: string | null): {
   url: string | null;
   failed: boolean;
+  httpError: number | null;
   origin: number | null;
 } {
   const [local, setLocal] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [httpError, setHttpError] = useState<{ remote: string; status: number } | null>(null);
   const [clock, setClock] = useState<{ remote: string; origin: number } | null>(null);
 
   useEffect(() => {
     if (!remote || !remote.includes("remux=1")) {
       setLocal(null);
       setFailed(false);
+      setHttpError(null);
       return;
     }
     const mime = pickMime();
     if (!mime) {
       setLocal(null);
       setFailed(true);
+      setHttpError(null);
       return;
     }
 
@@ -128,7 +132,10 @@ export function useMseSrc(remote: string | null): {
         /* Sequence so playback still starts at 0. Cues use the first tfdt. */
         sb.mode = "sequence";
         const res = await fetch(remote, { signal: ac.signal });
-        if (!res.ok || !res.body) throw new Error(`remux ${res.status}`);
+        if (!res.ok || !res.body) {
+          if (!res.ok) setHttpError({ remote, status: res.status });
+          throw new Error(`remux ${res.status}`);
+        }
         const reader = res.body.getReader();
         let pending: Uint8Array = new Uint8Array(0);
         let clock: RemuxClock = { timescale: null, origin: null };
@@ -167,6 +174,7 @@ export function useMseSrc(remote: string | null): {
 
     media.addEventListener("sourceopen", () => void open(), { once: true });
     setFailed(false);
+    setHttpError(null);
     setLocal(url);
     return () => {
       ac.abort();
@@ -182,6 +190,7 @@ export function useMseSrc(remote: string | null): {
   return {
     url: local,
     failed,
+    httpError: httpError?.remote === remote ? httpError.status : null,
     origin: clock && remote && clock.remote === remote ? clock.origin : null,
   };
 }

@@ -53,19 +53,69 @@ function sharesPrefix(name: string, prefix: string): boolean {
   return n === p || n.startsWith(`${p}: `) || n.startsWith(`${p} `);
 }
 
-function seriesKey(title: string, items: Media[]): string {
+function seriesKey(title: string, peerTitles: string[]): string {
   const name = seriesTitle(title);
+  const peers = peerTitles.map(seriesTitle);
   const candidates = [
     colonPrefix(name),
     name.replace(/\s*[:–—-]?\s*(?:ova|ona|oad|specials?|movies?|films?)\b.*$/i, "").trim(),
   ];
   for (const c of candidates) {
     if (!c || c.toLowerCase() === name.toLowerCase()) continue;
-    if (items.filter((m) => sharesPrefix(seriesTitle(m.title), c)).length > 1) {
+    if (peers.filter((n) => sharesPrefix(n, c)).length > 1) {
       return c.toLowerCase();
     }
   }
   return name.toLowerCase();
+}
+
+export function canonicalTitle(title: string, peerTitles: string[]): string {
+  return displayName(title, seriesKey(title, peerTitles));
+}
+
+export function seriesFold(title: string, peerTitles: string[]): string {
+  return seriesKey(title, peerTitles);
+}
+
+/** Progress/library titles often omit the colon (`Dr. STONE SCIENCE FUTURE`). Rails stay on seriesKey. */
+export function franchiseKey(title: string, peerTitles: string[]): string {
+  const name = seriesTitle(title);
+  const peers = peerTitles.map((t) => seriesTitle(t));
+  const named = [...new Set(peers)].sort((a, b) => a.length - b.length);
+  for (const c of named) {
+    if (c.length < 4) continue;
+    if (peers.filter((p) => sharesPrefix(p, c)).length > 1 && sharesPrefix(name, c)) {
+      return c.toLowerCase();
+    }
+  }
+  const words = (t: string) => t.toLowerCase().split(/\s+/).filter(Boolean);
+  const mine = words(name);
+  let best: string | null = null;
+  for (const p of peers) {
+    if (p.toLowerCase() === name.toLowerCase()) continue;
+    const theirs = words(p);
+    let i = 0;
+    while (i < mine.length && i < theirs.length && mine[i] === theirs[i]) i++;
+    if (i < 2) continue;
+    const prefix = mine.slice(0, i).join(" ");
+    if (prefix.length < 8) continue;
+    const n = peers.filter((x) => sharesPrefix(x, prefix)).length;
+    if (n > 1 && (!best || prefix.length < best.length)) best = prefix;
+  }
+  return best ?? name.toLowerCase();
+}
+
+export function franchiseLabel(title: string, peerTitles: string[]): string {
+  const key = franchiseKey(title, peerTitles);
+  const name = seriesTitle(title);
+  const exact = peerTitles.map((t) => seriesTitle(t)).find((t) => t.toLowerCase() === key);
+  if (exact) return exact;
+  const bits = name.split(/\s+/).filter(Boolean);
+  const want = key.split(/\s+/).filter(Boolean);
+  if (bits.length >= want.length && bits.slice(0, want.length).join(" ").toLowerCase() === key) {
+    return bits.slice(0, want.length).join(" ");
+  }
+  return name;
 }
 
 function displayName(title: string, key: string): string {
@@ -78,9 +128,10 @@ function displayName(title: string, key: string): string {
 
 /** One tile per franchise. Keeps the shortest title in the group (usually the root). */
 export function collapseSeries(items: Media[]): Media[] {
+  const titles = items.map((m) => m.title);
   const groups = new Map<string, Media[]>();
   for (const m of items) {
-    const k = `${m.kind}|${seriesKey(m.title, items)}`;
+    const k = `${m.kind}|${seriesKey(m.title, titles)}`;
     const g = groups.get(k);
     if (g) g.push(m);
     else groups.set(k, [m]);
@@ -88,7 +139,7 @@ export function collapseSeries(items: Media[]): Media[] {
   const out: Media[] = [];
   for (const g of groups.values()) {
     const rep = [...g].sort((a, b) => a.title.length - b.title.length)[0]!;
-    const key = seriesKey(rep.title, items);
+    const key = seriesKey(rep.title, titles);
     const title = displayName(rep.title, key);
     out.push(title === rep.title ? rep : { ...rep, title });
   }
@@ -151,15 +202,19 @@ export function partLabel(title: string, series: string, asSpecial = false): str
     rest = colonPrefix(title) ?? title;
   }
   if (asSpecial) {
-    const trimmed = rest.replace(/\bspecials?\b/gi, "").replace(/[–—:.\-\s]+$/g, "").trim();
+    const trimmed = rest
+      .replace(/\bspecials?\b(?:\s+episodes?\b)?/gi, "")
+      .replace(/^[–—:.\-\s]+/g, "")
+      .replace(/[–—:.\-\s]+$/g, "")
+      .trim();
     return trimmed || rest || title;
   }
-  rest = rest.replace(/^\(\d{4}\)$/, "").trim();
+  rest = rest.replace(/^\(\d{4}\)$/, "").replace(/[?–—:.\-\s]+$/g, "").trim();
   if (!rest) return "Season 1";
   return prettifyRest(rest);
 }
 
-const MAIN_FMT = /^(tv|ona|tv_short|tv special|manga|novel|manhwa|manhua|one_shot|one-shot|light_novel|light novel)?$/i;
+const MAIN_FMT = /^(tv|ona|tv_short|manga|novel|manhwa|manhua|one_shot|one-shot|light_novel|light novel)?$/i;
 
 function relKind(raw: string): RelKind | null {
   const s = raw.toLowerCase().replace(/[\s_-]+/g, "");
@@ -193,27 +248,44 @@ export function assembleSeries(startId: number, nodes: Map<number, SeriesNode>):
   }
 
   const parts: SeriesPart[] = [];
+  const bridgeSpecials: SeriesNode[] = [];
   const main = new Set<number>();
+  const chain = new Set<number>();
   let cur: number | undefined = rootId;
-  for (let i = 0; i < 16 && cur != null && !main.has(cur); i++) {
+  for (let i = 0; i < 16 && cur != null && !chain.has(cur); i++) {
     const n = nodes.get(cur);
     if (!n) break;
-    main.add(cur);
-    parts.push({ id: n.id, title: n.title, label: "", kind: "part" });
+    chain.add(cur);
+    if (MAIN_FMT.test(n.format ?? "")) {
+      main.add(cur);
+      parts.push({ id: n.id, title: n.title, label: "", kind: "part" });
+    } else {
+      bridgeSpecials.push(n);
+    }
     const seq = pickEdge(n.edges, "sequel");
-    if (!seq || main.has(seq.id)) break;
+    if (!seq || chain.has(seq.id)) break;
     if (!nodes.has(seq.id)) {
-      parts.push({ id: seq.id, title: seq.title, label: "", kind: "part" });
+      if (MAIN_FMT.test(seq.format ?? "")) {
+        parts.push({ id: seq.id, title: seq.title, label: "", kind: "part" });
+      }
       break;
     }
     cur = seq.id;
   }
 
   const series = seriesTitle(parts[0]?.title ?? start.title);
-  for (const p of parts) p.label = partLabel(p.title, series);
+  for (const [i, p] of parts.entries()) {
+    const label = partLabel(p.title, series);
+    p.label = i > 0 && label === "Season 1" ? `Season ${i + 1}` : label;
+  }
 
-  const specials: SeriesPart[] = [];
-  const seen = new Set(main);
+  const specials: SeriesPart[] = bridgeSpecials.map((n) => ({
+    id: n.id,
+    title: n.title,
+    label: partLabel(n.title, series, true),
+    kind: "special",
+  }));
+  const seen = new Set(chain);
   for (const n of nodes.values()) {
     if (!main.has(n.id)) continue;
     for (const e of n.edges) {
@@ -230,10 +302,35 @@ export function assembleSeries(startId: number, nodes: Map<number, SeriesNode>):
     }
   }
 
-  return { rootId, title: series, parts, specials };
+  return { rootId: parts[0]?.id ?? rootId, title: series, parts, specials };
 }
 
 export type EpisodeLike = { season?: number | null };
+
+/** Marks earlier franchise parts watched when you jump into a later season. */
+export function progressTree(
+  parts: SeriesPart[],
+  mediaId: number,
+  titles: Result<Pick<Media, "title" | "cover" | "units">>[],
+): {
+  seriesParts?: { mediaId: number; title: string; cover: string | null; units: number }[];
+  partIndex?: number;
+} {
+  if (parts.length < 2) return {};
+  const partIndex = parts.findIndex((p) => p.id === mediaId);
+  return {
+    seriesParts: parts.map((p, i) => {
+      const t = titles[i];
+      return {
+        mediaId: p.id,
+        title: t?.ok ? t.value.title : p.title,
+        cover: t?.ok ? t.value.cover ?? null : null,
+        units: t?.ok ? t.value.units ?? 0 : 0,
+      };
+    }),
+    ...(partIndex >= 0 ? { partIndex } : {}),
+  };
+}
 
 /**
  * Sum of `units` for every part before `selectedId` (series order), plus that
@@ -277,16 +374,24 @@ export function windowEpisodes<T extends EpisodeLike>(
   seasonHint: number | null,
 ): T[] {
   if (episodes.length === 0) return episodes;
-  const bySeason = seasonHint != null ? episodes.filter((e) => (e.season ?? 1) === seasonHint) : [];
-  const fallback = bySeason.length ? bySeason : episodes;
 
   // ponytail: flat slack for a stray movie/special mixed into an otherwise
   // single-season list; upgrade to a ratio if a real addon needs it.
   const SLACK = 3;
+  if (seasonHint === 0) {
+    const specials = episodes.filter((e) => e.season === 0);
+    if (specials.length) {
+      return count == null || Math.abs(specials.length - count) <= SLACK ? specials : [];
+    }
+    return count != null && episodes.length === count ? episodes : [];
+  }
   if (count != null && Math.abs(episodes.length - count) <= SLACK) {
     // The list already covers just this part — nothing to slice.
     return episodes;
   }
+
+  const bySeason = seasonHint != null ? episodes.filter((e) => (e.season ?? 1) === seasonHint) : [];
+  const fallback = bySeason.length ? bySeason : episodes;
 
   if (count != null && offset + count <= episodes.length) {
     const slice = episodes.slice(offset, offset + count);
@@ -422,6 +527,7 @@ async function anilistNode(id: number): Promise<SeriesNode | null> {
       }`,
       variables: { id },
     }),
+    cache: "force-cache",
     next: { revalidate: 3600 },
     signal: AbortSignal.timeout(4_000),
   });

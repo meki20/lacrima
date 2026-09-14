@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { NEXT_UP_SECONDS, nextUpCountdown, toggleSubChoice } from "./nextup.ts";
 
-test("next-up stays hidden until the credits window, and never on a failed remux", () => {
+test("next-up waits for a credible end, never a catalog-runtime estimate", () => {
   const base = {
     position: 1425,
     duration: 1440,
@@ -11,10 +11,11 @@ test("next-up stays hidden until the credits window, and never on a failed remux
     cancelled: false,
     hasNext: true,
   };
-  assert.equal(nextUpCountdown(base), NEXT_UP_SECONDS);
-  assert.equal(nextUpCountdown({ ...base, position: 1432.2 }), 8);
-  assert.equal(nextUpCountdown({ ...base, position: 1440 }), 1);
+  assert.equal(nextUpCountdown(base), null);
+  assert.equal(nextUpCountdown({ ...base, position: 1432.2 }), null);
+  assert.equal(nextUpCountdown({ ...base, position: 1440 }), null);
   assert.equal(nextUpCountdown({ ...base, ended: true }), 0);
+  assert.equal(nextUpCountdown({ ...base, ended: true, position: 1200 }), null);
   assert.equal(nextUpCountdown({ ...base, position: 1200 }), null);
   assert.equal(nextUpCountdown({ ...base, watchedSeconds: 10 }), null);
   assert.equal(nextUpCountdown({ ...base, duration: 40 }), null);

@@ -1,4 +1,4 @@
-import { LANGS, bucketLangs, trackLangs, type Lang } from "./audio.ts";
+import { LANGS, bucketLangs, subtitleLangs, trackLangs, type Lang } from "./audio.ts";
 
 /**
  * The layer between addon listings and the player.
@@ -21,11 +21,11 @@ import { LANGS, bucketLangs, trackLangs, type Lang } from "./audio.ts";
  * fixed, because nothing ever asked the question again. It lives here because
  * every one of those layers already imports this module.
  */
-export const RANK_VERSION = 7;
+export const RANK_VERSION = 8;
 
 export type Quality = "2160p" | "1080p" | "720p" | "480p";
 
-export type StreamPick = { url: string; provider: string; hint?: string };
+export type StreamPick = { url: string; provider: string; hint?: string; subtitles?: Lang[] };
 
 /** How many torrents the player races inside one quality bucket. */
 export const TORRENT_RACE_MAX = 6;
@@ -88,11 +88,12 @@ export function torrentRaceUrl(picks: StreamPick[], batch = 0, max = TORRENT_RAC
  * `t` restarts the remux at a keyframe: a live pipe cannot answer a byte range, so
  * seeking is a new request rather than a range on the old one.
  */
-export function remuxUrl(url: string | null, lang?: Lang, seek = 0): string | null {
+export function remuxUrl(url: string | null, lang?: Lang, seek = 0, subtitle?: Lang): string | null {
   if (!url) return null;
   const u = new URL(url, "http://lacrima.local");
   u.searchParams.set("remux", "1");
   if (lang) u.searchParams.set("lang", lang);
+  if (subtitle) u.searchParams.set("sub", subtitle);
   if (seek > 0) u.searchParams.set("t", String(Math.round(seek * 100) / 100));
   return `${u.pathname}${u.search}`;
 }
@@ -203,6 +204,8 @@ export type Candidate = {
   sameWork?: boolean;
   /** True when the listing names the season and episode asked for, not a bare number. */
   exactSlot?: boolean;
+  /** Subtitle languages the listing says are embedded in this file. */
+  subtitles?: Lang[];
 };
 
 const QORDER: Quality[] = ["1080p", "720p", "2160p", "480p"];
@@ -350,6 +353,7 @@ export function preferUrl(text: string, url: string, lang: Lang): number {
   else if (buckets.includes(lang)) n += 2;
   if (lang === "ja" && /🎧\s*Audio:\s*Japanese/i.test(text)) n += 3;
   if (lang === "ja" && /🔊[^\n]*🇯🇵/u.test(text)) n += 4;
+  if (lang === "ja" && subtitleLangs(text).includes("en")) n += 6;
   if (lang === "en" && /\benglish\s*dub\b/i.test(text)) n += 6;
   if (lang === "ja" && /\bsub\b/i.test(text) && !/\bdub\b/i.test(text)) n += 4;
   if (lang === "ja" && /\bmulti\b/i.test(text) && !/🎧\s*Audio:\s*Japanese/i.test(text)) n -= 8;
@@ -449,7 +453,12 @@ export function present(items: Candidate[], prefer?: Lang): Playlist {
       for (const r of rankRows(rows, lang)) {
         if (seen.has(r.url)) continue;
         seen.add(r.url);
-        picks.push({ url: r.url, provider: r.provider, hint: r.text });
+        picks.push({
+          url: r.url,
+          provider: r.provider,
+          hint: r.text,
+          subtitles: r.subtitles ?? subtitleLangs(r.text),
+        });
       }
       if (!picks.length) continue;
       groups.push({ id: `${q}-${lang}`, quality: q, lang, label: `${q} · ${label}`, picks });

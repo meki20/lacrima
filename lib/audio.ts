@@ -114,6 +114,14 @@ function spokenText(text: string): string {
   return text.replace(/💬[^\n]*/gu, "");
 }
 
+/** Subtitle languages advertised after TorrentClaw's `💬` marker. */
+export function subtitleLangs(text: string): Lang[] {
+  const marked = /💬([^\n💾🏷]*)/u.exec(text)?.[1];
+  if (marked) return namedLangs(marked);
+  if (/\benglish[\s._-]?subs?\b|\beng[\s._-]?subs?\b/i.test(text)) return ["en"];
+  return [];
+}
+
 function namedLangs(text: string): Lang[] {
   const named: Lang[] = [];
   for (const { lang, re } of TOKENS) {

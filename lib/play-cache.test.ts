@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { withCacheParams } from "./play-cache-client.ts";
 import {
+  adoptCompleted,
   animeDir,
   boostPlaylist,
   chapterSlug,
@@ -149,6 +150,20 @@ test("a partial download is never promoted to the served file", () => {
     writeFileSync(partPath(ctx), Buffer.alloc(4000));
     promotePart(ctx, null);
     assert.equal(existsSync(videoPath(ctx)), false);
+  });
+});
+
+test("a completed better-matched source replaces an incompatible cached video atomically", () => {
+  scratch(() => {
+    const ctx = { via: "kitsu" as const, mediaId: 7442, chapterId: "ch-5" };
+    ensureMediaDir(ctx);
+    const old = videoPath(ctx);
+    const next = join(animeDir("kitsu", 7442), "replacement.mkv");
+    writeFileSync(old, "old");
+    writeFileSync(next, "new");
+    adoptCompleted(ctx, next, true);
+    assert.equal(readFileSync(old, "utf8"), "new");
+    assert.equal(readFileSync(next, "utf8"), "new");
   });
 });
 

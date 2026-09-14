@@ -72,6 +72,7 @@ export async function GET(req: Request) {
     const r = await resolveStreams(chapterId, {
       ...extras,
       title: meta?.ok ? meta.value.title : undefined,
+      fresh,
     });
     if (!r.ok) return Response.json({ error: r.reason }, { status: 502 });
     if (ctx) savePlaylist(ctx, r.value);

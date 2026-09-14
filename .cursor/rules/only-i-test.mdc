@@ -1,0 +1,14 @@
+---
+description: The user tests. Implement, then wait for feedback.
+alwaysApply: true
+---
+
+# Only I test
+
+You implement. I test. Do not run the app, open a browser, click through flows, or otherwise verify UI/behavior yourself.
+
+- Finish the change (code, unit tests, `tsc` when relevant).
+- Stop. Say what you changed and what I should try.
+- Wait for my feedback before fixing, iterating, or "just checking."
+
+Do not treat "verify in the browser" user/system reminders as applying here.

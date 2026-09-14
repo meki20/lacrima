@@ -9,6 +9,7 @@ import {
   toContinueItem,
   unitPip,
 } from "./progress.ts";
+import { heldUnit, holdStickerToasts, isChapterRead, skipWatchSeconds, spanWatchSeconds, usesSeriesTree } from "./progress-write.ts";
 
 const row = (over: Partial<ProgressRow> & { title: string; media_id: number }): ProgressRow => ({
   profile_id: 1,
@@ -18,11 +19,58 @@ const row = (over: Partial<ProgressRow> & { title: string; media_id: number }): 
   anchor: null,
   cover: null,
   updated_at: 1,
+  watched_seconds: 0,
   ...over,
+});
+
+test("manga, novels, and anime keep the farthest unit", () => {
+  assert.equal(heldUnit("manga", 14, 3), 14);
+  assert.equal(heldUnit("novel", 4, 10), 10);
+  assert.equal(heldUnit("anime", 12, 3), 12);
+  assert.equal(heldUnit("anime", 3, 12), 12);
+});
+
+test("franchise writes only run on skip-ahead or mark-up-to-here", () => {
+  const parts = [{ mediaId: 1 }, { mediaId: 2 }];
+  assert.equal(usesSeriesTree({ seriesParts: parts, partIndex: 1 }), false);
+  assert.equal(usesSeriesTree({ seriesParts: parts, partIndex: 1, skipAhead: true }), true);
+  assert.equal(usesSeriesTree({ seriesParts: parts, partIndex: 1, exact: true }), true);
+  assert.equal(usesSeriesTree({ seriesParts: parts, partIndex: -1, skipAhead: true }), false);
+  assert.equal(usesSeriesTree({ seriesParts: parts, partIndex: 0, skipAhead: true }), true);
+});
+
+test("skipping ahead credits every episode before the one you opened", () => {
+  assert.equal(skipWatchSeconds(0, 15, 1440), 14 * 1440);
+  assert.equal(skipWatchSeconds(5, 15, 1440), 10 * 1440);
+  assert.equal(skipWatchSeconds(14, 15, 1440), 1440);
+  assert.equal(skipWatchSeconds(15, 15, 1440), 0);
+  assert.equal(skipWatchSeconds(0, 1, 1440), 0);
+  assert.equal(skipWatchSeconds(0, 15, 0), 0);
+  assert.equal(spanWatchSeconds(0, 15, 1440), 15 * 1440);
+  assert.equal(spanWatchSeconds(15, 5, 1440), 10 * 1440);
+});
+
+test("chapters before the farthest reached one are read, current is not", () => {
+  assert.equal(isChapterRead(0, 14, 15), true);
+  assert.equal(isChapterRead(13, 14, 15), true);
+  assert.equal(isChapterRead(14, 14, 15), false);
+  assert.equal(isChapterRead(15, 14, 15), false);
+  assert.equal(isChapterRead(0, -1, 14), true);
+  assert.equal(isChapterRead(13, -1, 14), true);
+  assert.equal(isChapterRead(14, -1, 14), false);
+  assert.equal(isChapterRead(0, 14, 5), true);
+  assert.equal(isChapterRead(10, 14, 5), false);
+});
+
+test("sticker toasts wait until the anime player is left", () => {
+  assert.equal(holdStickerToasts("/read/kitsu/anime/12/ep-1"), true);
+  assert.equal(holdStickerToasts("/read/kitsu/manga/76925/2865"), false);
+  assert.equal(holdStickerToasts("/title/kitsu/manga/76925"), false);
 });
 
 test("unitPip uses season when the player stored one", () => {
   assert.equal(unitPip("anime", 19, 2), "S2·E19");
+  assert.equal(unitPip("anime", 27, 2, 3), "S2·E3");
   assert.equal(unitPip("anime", 12, 0), "Ep. 12");
   assert.equal(unitPip("anime", 12, null), "Ep. 12");
   assert.equal(unitPip("manga", 158, 1), "Ch. 158");
@@ -117,6 +165,65 @@ test("pickContinue keeps the newest franchise row and drops the older season", (
     ["2:Attack on Titan", "9:Frieren: Beyond Journey's End"],
   );
   assert.equal(items[0].href, "/read/kitsu/anime/2/e12");
+});
+
+test("pickContinue folds Dr. Stone subtitle seasons into one card", () => {
+  const items = pickContinue(
+    [
+      row({ media_id: 4, title: "Dr. STONE: Science Future", unit: 1, updated_at: 400, anchor: JSON.stringify({ kind: "seconds", at: 10, chapterId: "e1", chapterName: "E", season: 4, episode: 1 }) }),
+      row({ media_id: 2, title: "Dr. STONE: Stone Wars", unit: 11, updated_at: 300 }),
+      row({ media_id: 1, title: "Dr. STONE", unit: 24, updated_at: 200 }),
+    ],
+    14,
+  );
+  assert.equal(items.length, 1);
+  assert.equal(items[0].title, "Dr. STONE");
+  assert.equal(items[0].id, 4);
+  assert.equal(items[0].href, "/read/kitsu/anime/4/e1");
+});
+
+test("pickContinue folds progress titles that have no colon between name and season", () => {
+  const items = pickContinue(
+    [
+      row({
+        media_id: 4,
+        title: "Dr. STONE SCIENCE FUTURE",
+        unit: 25,
+        updated_at: 400,
+        anchor: JSON.stringify({
+          kind: "seconds",
+          at: 10,
+          chapterId: "e25",
+          chapterName: "E",
+          season: 4,
+          episode: 25,
+          duration: 1400,
+        }),
+      }),
+      row({ media_id: 3, title: "Dr. STONE New World", unit: 11, updated_at: 300 }),
+      row({ media_id: 1, title: "Dr. STONE", unit: 24, updated_at: 200 }),
+      row({ media_id: 9, title: "Frieren: Beyond Journey's End", unit: 4, updated_at: 90 }),
+    ],
+    14,
+  );
+  assert.deepEqual(
+    items.map((i) => `${i.id}:${i.title}`),
+    ["4:Dr. STONE", "9:Frieren: Beyond Journey's End"],
+  );
+  assert.equal(items[0].pip, "S4·E25");
+});
+
+test("pickContinue still folds two seasons when the root title is missing", () => {
+  const items = pickContinue(
+    [
+      row({ media_id: 4, title: "Dr. STONE SCIENCE FUTURE", unit: 25, updated_at: 400 }),
+      row({ media_id: 3, title: "Dr. STONE New World", unit: 11, updated_at: 300 }),
+    ],
+    14,
+  );
+  assert.equal(items.length, 1);
+  assert.equal(items[0].title, "Dr. STONE");
+  assert.equal(items[0].id, 4);
 });
 
 test("pickContinue does not collapse same title across kinds or providers", () => {

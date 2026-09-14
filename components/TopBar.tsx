@@ -3,6 +3,7 @@ import Link from "next/link";
 import { currentProfile } from "@/lib/profile";
 import { allRemoteSources } from "@/lib/sources";
 import SearchField from "./SearchField";
+import StickerPicker from "./StickerPicker";
 
 /** Ambient health: reachable + how many remote sources are usable right now. */
 async function health() {
@@ -41,6 +42,14 @@ const TABS = [
   ["Yours", "/yours", "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM5.5 20a6.5 6.5 0 0 1 13 0"],
 ] as const;
 
+const MORE = [
+  ["Stickers", "/stickers", "M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2"],
+  ["Sources", "/sources", "M12 4l8 4-8 4-8-4 8-4zM4 12l8 4 8-4M4 16l8 4 8-4"],
+  ["Settings", "/settings", "settings"],
+] as const;
+
+type Tab = (typeof TABS)[number] | (typeof MORE)[number];
+
 function Icon({ d }: { d: string }) {
   return (
     <svg
@@ -54,15 +63,30 @@ function Icon({ d }: { d: string }) {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d={d} />
+      {d === "settings" ? (
+        <>
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+          <circle cx="12" cy="12" r="3" />
+        </>
+      ) : (
+        <path d={d} />
+      )}
     </svg>
   );
 }
 
-function Tabs({ active, className }: { active: string; className: string }) {
+function Tabs({
+  active,
+  className,
+  items = TABS,
+}: {
+  active: string;
+  className: string;
+  items?: readonly Tab[];
+}) {
   return (
     <nav className={className}>
-      {TABS.map(([label, href, d]) => (
+      {items.map(([label, href, d]) => (
         <Link key={label} href={href} className={`tab${label === active ? " on" : ""}`} aria-current={label === active ? "page" : undefined}>
           <Icon d={d} />
           {label}
@@ -79,11 +103,13 @@ export default async function TopBar({ active = "Home" }: { active?: string }) {
     <>
       <aside className="sidebar">
         <Link href="/" className="brand" aria-label="Lacrima">
-          <img src="/logo.png" alt="" width="128" height="128" />
+          <img src="/logo.png" alt="" width="188" height="188" />
         </Link>
         <div>
           <div className="side-label">MENU</div>
           <Tabs active={active} className="tabs" />
+          <hr className="side-rule" />
+          <Tabs active={active} className="tabs" items={MORE} />
         </div>
       </aside>
       <div className="topbar">
@@ -105,13 +131,12 @@ export default async function TopBar({ active = "Home" }: { active?: string }) {
         >
           <HealthChip />
         </Suspense>
+        <StickerPicker />
         <Link href="/profiles" className="pfp" style={{ background: me.avatar_color }}>
           {me.name[0]?.toUpperCase()}
         </Link>
       </div>
 
-      {/* Sibling of .topbar on purpose: its backdrop-filter would become the
-          containing block for a fixed-position descendant. */}
       <Tabs active={active} className="bottomnav" />
     </>
   );

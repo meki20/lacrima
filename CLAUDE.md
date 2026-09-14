@@ -121,14 +121,14 @@ for it. Every element deliberately positioned, sized, coloured, and justified.
 
 Tokens live in `styles/tokens.css` — the source of truth for colour, radius, spacing, type,
 imported by both the app and the static mockups.
-Reference mockups: `mockups/home.html`, `mockups/yours.html`.
+Reference mockups: `mockups/home.html`.
 
 - Dark-first. `--canvas` #0c0908, warm rust surfaces stepping up from there.
 - Border-first elevation. 1px hairlines for structure; shadows only for overlays and popovers.
 - Type: Geist Sans, Geist Mono for metadata and technical labels. Tight negative tracking at
   display sizes, relaxed at body. Two weights: 400 and 500. Never heavier.
 - Sentence case everywhere. No title case.
-- `--accent` is per-profile and defaults to rust (`#c44532`). `--highlight` is blonde
+- `--accent` is per-profile and defaults to rust (`#630E19`). `--highlight` is blonde
   (`#e8c56b`) from the logo. Treat both as punctuation, not decoration.
 - Motion explains, never performs.
 
@@ -144,8 +144,7 @@ adding anything.
 - **Home** — what to do right now: cinematic hero, continue, new-from-your-list, popular,
   recommended. Rails.
 - **Yours** — who you are and what you own: identity header on your wallpaper, stats, pinned
-  shelf, characters, sticker collection, full library with status filters, downloads,
-  appearance. Grids.
+  shelf, full library with status filters, downloads. Grids. Stickers live on their own page.
 
 Continue appears only on Home. The library grid appears only on Yours.
 

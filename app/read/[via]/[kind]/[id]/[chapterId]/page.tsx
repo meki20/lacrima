@@ -1,18 +1,20 @@
 import Link from "next/link";
 import Player from "@/components/Player";
 import Reader from "@/components/Reader";
+import TrackProgress from "@/components/TrackProgress";
 import { getBinding } from "@/lib/match";
 import type { MediaKind, ProviderSlug } from "@/lib/media";
 import { fetchTitle } from "@/lib/metadata";
 import { titleBackHref } from "@/lib/nav";
 import { currentProfile } from "@/lib/profile";
+import { profileSettings, readerSettings } from "@/lib/settings";
 import type { ProgressWrite } from "@/lib/progress-write";
 import { getProgress, parseAnchor } from "@/lib/progress";
 import { loadPlaylist } from "@/lib/play-cache";
 import { chaptersFor } from "@/lib/resolve";
 import { backend } from "@/lib/sources";
 import { resolveStreams } from "@/lib/sources/stremio";
-import { fetchSeries } from "@/lib/series";
+import { fetchSeries, progressTree } from "@/lib/series";
 
 export const dynamic = "force-dynamic";
 
@@ -81,11 +83,20 @@ export default async function Read({
     currentProfile(),
     fetchSeries(via, kind, mediaId),
   ]);
+  const settings = profileSettings(me.id);
 
   back = titleBackHref(via, kind, mediaId, seriesR.ok ? seriesR.value : null);
 
   if (!media.ok) return <Dead back={back} reason={media.reason} />;
   const m = media.value;
+  const seriesParts = seriesR.ok ? seriesR.value.parts : [];
+  const partTitles =
+    kind === "anime" && seriesParts.length > 1
+      ? await Promise.all(
+          seriesParts.map((p) => (p.id === mediaId ? media : fetchTitle(via, kind, p.id))),
+        )
+      : [];
+  const tree = kind === "anime" ? progressTree(seriesParts, mediaId, partTitles) : {};
 
   if (pages && !pages.ok) return <Dead back={back} reason={pages.reason} />;
   if (pages && pages.value.length === 0) {
@@ -120,14 +131,16 @@ export default async function Read({
     kind: m.kind,
     title: m.title,
     cover: m.cover,
-    unit: here?.number ?? 0,
+    unit: at >= 0 ? at + 1 : (here?.number ?? 0),
     chapterId,
     chapterName:
       here?.name ??
       (kind === "anime" ? `Episode ${here?.number ?? ""}` : `Chapter ${chapterId}`),
     season: here?.season,
+    episode: here?.number,
     durationSeconds: m.unitMinutes ? m.unitMinutes * 60 : null,
     pages: pages?.ok ? pages.value.length : null,
+    ...tree,
   };
 
   if (kind === "anime") {
@@ -161,6 +174,7 @@ export default async function Read({
         initialTime={initialTime}
         durationSeconds={m.unitMinutes ? m.unitMinutes * 60 : null}
         progress={progress}
+        settings={settings}
       />
     );
   }
@@ -171,6 +185,7 @@ export default async function Read({
     const html = pages.value[0].replace(/<script[\s\S]*?<\/script>/gi, "");
     return (
       <div className="reader">
+        <TrackProgress progress={progress} />
         <header className="reader-bar">
           <Link className="rbtn" href={back}>
             ←
@@ -196,6 +211,15 @@ export default async function Read({
       nextHref={at >= 0 ? hop(at + 1) : null}
       progress={progress}
       settingsKey={`${m.via}:${m.id}`}
+      defaults={readerSettings(settings)}
+      chapters={chapters.map((c) => ({
+        id: c.id,
+        number: c.number,
+        name: c.name,
+        season: c.season ?? null,
+        href: `/read/${via}/${kind}/${mediaId}/${encodeURIComponent(c.id)}`,
+      }))}
+      currentId={chapterId}
     />
   );
 }
