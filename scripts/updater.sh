@@ -33,24 +33,31 @@ release() {
 
 quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
 
+gitcmd() {
+  case "$(git -C /workspace ls-files --eol package.json 2>/dev/null)" in
+    *"w/crlf"*) git -C /workspace -c core.autocrlf=true "$@" ;;
+    *) git -C /workspace "$@" ;;
+  esac
+}
+
 apply() {
   tag="$1"
-  if [ "$(git -C /workspace config --get remote.origin.url || true)" != "$REPO" ]; then
+  if [ "$(gitcmd config --get remote.origin.url || true)" != "$REPO" ]; then
     sql "update app_updates set requested_at=null, last_status='The checkout remote is not the Lacrima repository.' where singleton=1;"
     return
   fi
-  if [ -n "$(git -C /workspace status --porcelain)" ]; then
+  if [ -n "$(gitcmd status --porcelain)" ]; then
     sql "update app_updates set requested_at=null, last_status='Update skipped: the checkout has local changes.' where singleton=1;"
     return
   fi
-  branch="$(git -C /workspace branch --show-current)"
+  branch="$(gitcmd branch --show-current)"
   if [ -z "$branch" ]; then
     sql "update app_updates set requested_at=null, last_status='Update skipped: the checkout is detached.' where singleton=1;"
     return
   fi
   updated="$(now)"
   sql "update app_updates set requested_at=null, last_status='Pulling and rebuilding Lacrima.' where singleton=1;"
-  if git -C /workspace pull --ff-only origin "$branch" && docker compose --project-directory /workspace --profile serve up -d --build lacrima; then
+  if gitcmd pull --ff-only origin "$branch" && docker compose --project-directory /workspace --profile serve up -d --build lacrima; then
     sql "update app_updates set last_updated_at=$updated, last_applied_tag=$(quote "$tag"), last_status='Lacrima was updated and restarted.' where singleton=1;"
   else
     sql "update app_updates set last_status='Update failed. Check the lacrima-updater container logs.' where singleton=1;"
