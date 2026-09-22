@@ -29,6 +29,10 @@ tailscale serve --bg --https=443 http://127.0.0.1:7345
 
 The server uses Caddy for the LAN route and Tailscale Serve for private HTTPS. Media comes from extension repositories you add yourself; Lacrima never provides or recommends sources.
 
+## Updates
+
+The Settings page tracks [GitHub releases](https://github.com/meki20/lacrima/releases), queues a manual update, and can check once a day at a chosen 24-hour time. The `updater` companion starts with the `serve` profile. It only accepts the configured Lacrima origin, refuses a dirty checkout, pulls with `--ff-only`, then rebuilds and restarts the `lacrima` container. It needs Docker's local socket, so only run it on a trusted host.
+
 ## Development
 
 ```bash

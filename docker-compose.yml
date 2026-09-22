@@ -33,6 +33,25 @@ services:
       # LACRIMA_LANGS: en,all
     gpus: all
 
+  # The app queues update requests in SQLite; this intentionally separate
+  # process owns the Docker socket and is the only one allowed to rebuild it.
+  updater:
+    profiles: ["serve"]
+    build:
+      context: .
+      dockerfile: Dockerfile.updater
+    container_name: lacrima-updater
+    restart: unless-stopped
+    depends_on:
+      - lacrima
+    volumes:
+      - .:/workspace
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      TZ: Europe/Berlin
+      LACRIMA_DB: /data/lacrima.db
+
   caddy:
     profiles: ["serve"]
     image: caddy:2-alpine

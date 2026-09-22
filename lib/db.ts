@@ -321,6 +321,28 @@ const MIGRATIONS: string[] = [
 
   // 15 — phone and desktop decorations are separate; same breakpoint as the rail.
   `alter table sticker_placements add column surface text not null default 'desktop';`,
+
+  // 16 — update policy is server-wide, not a profile preference. The companion
+  //      updater is deliberately the only process that can pull and restart.
+  `
+    create table if not exists app_updates (
+      singleton          integer primary key check (singleton = 1),
+      auto_update        integer not null default 0,
+      update_time        text not null default '03:00',
+      requested_at       integer,
+      last_checked_at    integer,
+      latest_tag         text,
+      latest_name        text,
+      latest_url         text,
+      latest_published_at integer,
+      last_applied_tag   text,
+      last_updated_at    integer,
+      last_auto_day      text,
+      last_status        text,
+      updater_heartbeat  integer
+    );
+    insert or ignore into app_updates (singleton) values (1);
+  `,
 ]
 
 function migrate(d: DatabaseSync) {

@@ -1,0 +1,7 @@
+FROM docker:28-cli
+
+RUN apk add --no-cache curl docker-cli-compose git jq sqlite tzdata
+COPY scripts/updater.sh /usr/local/bin/lacrima-updater
+RUN chmod +x /usr/local/bin/lacrima-updater
+
+ENTRYPOINT ["/usr/local/bin/lacrima-updater"]
