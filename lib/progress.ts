@@ -1,10 +1,10 @@
 import { db, plain, type Anchor } from "./db.ts";
 import type { Media, MediaKind, ProviderSlug } from "./media.ts";
-import { ensureLibrary } from "./library.ts";
+import { ensureLibrary, getLibrary, removeLibrary } from "./library.ts";
 import { awardForTitle } from "./stickers.ts";
 import { isNightHour, markActivity } from "./yours.ts";
 import { franchiseKey, franchiseLabel, seriesTitle } from "./series.ts";
-import { ANIME_EPISODE_SECONDS, heldUnit, skipWatchSeconds, spanWatchSeconds, usesSeriesTree, type SeriesPartMark } from "./progress-write.ts";
+import { ANIME_EPISODE_SECONDS, heldUnit, keepsResumeAnchor, skipWatchSeconds, spanWatchSeconds, usesSeriesTree, type SeriesPartMark } from "./progress-write.ts";
 
 export type ProgressRow = {
   profile_id: number;
@@ -40,6 +40,12 @@ export function getProgress(
   return row && plain(row);
 }
 
+/** Forget a title's resume state; a manually chosen non-reading library state survives. */
+export function removeHistory(profileId: number, via: ProviderSlug, mediaId: number) {
+  db().prepare("delete from progress where profile_id = ? and via = ? and media_id = ?").run(profileId, via, mediaId);
+  if (getLibrary(profileId, via, mediaId)?.status === "reading") removeLibrary(profileId, via, mediaId);
+}
+
 export async function setProgress(p: {
   profileId: number;
   media: Pick<Media, "via" | "id" | "kind" | "title" | "cover"> &
@@ -54,6 +60,10 @@ export async function setProgress(p: {
   const prev = getProgress(p.profileId, p.media.via, p.media.id);
   const prevUnit = prev?.unit ?? 0;
   const unit = p.exact ? Math.max(0, Math.floor(p.unit)) : heldUnit(p.media.kind, prevUnit, p.unit);
+  if (p.exact && unit === 0) {
+    removeHistory(p.profileId, p.media.via, p.media.id);
+    return [];
+  }
   const tick = Math.max(0, Math.min(30, Math.floor(p.watchedDelta ?? 0)));
   const ep =
     p.durationSeconds && p.durationSeconds > 1
@@ -71,6 +81,13 @@ export async function setProgress(p: {
     }
   }
   const delta = tick + credit;
+  const prevAnchor = parseAnchor(prev?.anchor ?? null);
+  const anchor = keepsResumeAnchor(
+    prevUnit,
+    p.unit,
+    prevAnchor && "chapterId" in prevAnchor ? prevAnchor.chapterId : undefined,
+    p.exact,
+  ) ? prev!.anchor : JSON.stringify(p.anchor);
   db()
     .prepare(
       `insert into progress
@@ -90,7 +107,7 @@ export async function setProgress(p: {
       p.media.id,
       p.media.kind,
       unit,
-      JSON.stringify(p.anchor),
+      anchor,
       p.media.title,
       p.media.cover,
       Date.now(),

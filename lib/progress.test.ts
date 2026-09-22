@@ -9,7 +9,7 @@ import {
   toContinueItem,
   unitPip,
 } from "./progress.ts";
-import { heldUnit, holdStickerToasts, isChapterRead, skipWatchSeconds, spanWatchSeconds, usesSeriesTree } from "./progress-write.ts";
+import { heldUnit, holdStickerToasts, isChapterRead, keepsResumeAnchor, skipWatchSeconds, spanWatchSeconds, usesSeriesTree } from "./progress-write.ts";
 
 const row = (over: Partial<ProgressRow> & { title: string; media_id: number }): ProgressRow => ({
   profile_id: 1,
@@ -60,6 +60,14 @@ test("chapters before the farthest reached one are read, current is not", () => 
   assert.equal(isChapterRead(14, -1, 14), false);
   assert.equal(isChapterRead(0, 14, 5), true);
   assert.equal(isChapterRead(10, 14, 5), false);
+  assert.equal(isChapterRead(2, 2, 5), true);
+});
+
+test("revisiting read units keeps the real resume anchor", () => {
+  assert.equal(keepsResumeAnchor(5, 3, "chapter-5"), true);
+  assert.equal(keepsResumeAnchor(5, 5, "-"), true);
+  assert.equal(keepsResumeAnchor(5, 5, "chapter-5"), false);
+  assert.equal(keepsResumeAnchor(5, 3, "chapter-5", true), false);
 });
 
 test("sticker toasts wait until the anime player is left", () => {

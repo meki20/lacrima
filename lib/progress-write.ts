@@ -81,10 +81,20 @@ export function spanWatchSeconds(a: number, b: number, episodeSeconds: number): 
   return n * ep;
 }
 
-/** Current chapter stays bright; everything at or before `unit` is dim. */
+/** A reopened older chapter stays read; only the farthest active unit stays bright. */
 export function isChapterRead(index: number, currentIndex: number, unit: number): boolean {
-  if (index === currentIndex) return false;
+  if (index === currentIndex && index + 1 >= unit) return false;
   return index + 1 <= unit;
+}
+
+/** Re-reading history must not move Continue backwards; a manual boundary has no active unit. */
+export function keepsResumeAnchor(
+  prevUnit: number,
+  nextUnit: number,
+  prevChapterId: string | number | undefined,
+  exact = false,
+): boolean {
+  return !exact && (nextUnit < prevUnit || (nextUnit === prevUnit && prevChapterId === "-"));
 }
 
 export function holdStickerToasts(pathname: string): boolean {
@@ -126,7 +136,7 @@ function chapterAnchor(p: ProgressWrite): Anchor {
   if (p.kind === "novel") {
     return {
       kind: "paragraph",
-      cfi: "0",
+      cfi: "p:0",
       chapterId: p.chapterId,
       chapterName: p.chapterName,
     };

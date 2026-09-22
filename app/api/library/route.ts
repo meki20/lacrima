@@ -7,6 +7,7 @@ import {
   upsertLibrary,
   type LibraryStatus,
 } from "@/lib/library";
+import { removeHistory } from "@/lib/progress";
 import type { MediaKind, ProviderSlug } from "@/lib/media";
 
 export const runtime = "nodejs";
@@ -24,6 +25,7 @@ type Body = {
   score?: number | null;
   pin?: boolean;
   remove?: boolean;
+  removeHistory?: boolean;
   reorder?: { via: ProviderSlug; id: number }[];
 };
 
@@ -45,6 +47,10 @@ export async function POST(req: Request) {
   }
   if (body.remove || body.status === "remove") {
     removeLibrary(me.id, via, id);
+    return Response.json({ ok: true, entry: null });
+  }
+  if (body.removeHistory) {
+    removeHistory(me.id, via, id);
     return Response.json({ ok: true, entry: null });
   }
   if (body.pin != null && !title) {
