@@ -34,10 +34,11 @@ release() {
 quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
 
 gitcmd() {
-  case "$(git -C /workspace ls-files --eol package.json 2>/dev/null)" in
-    *"w/crlf"*) git -C /workspace -c core.autocrlf=true "$@" ;;
-    *) git -C /workspace "$@" ;;
-  esac
+  if git -C /workspace ls-files --eol | grep -q 'w/crlf'; then
+    git -C /workspace -c core.autocrlf=true "$@"
+  else
+    git -C /workspace "$@"
+  fi
 }
 
 apply() {
