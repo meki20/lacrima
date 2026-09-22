@@ -9,17 +9,18 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Lang } from "./audio.ts";
 import type { ProviderSlug } from "./media.ts";
 import { finalizeRacePoolsForStore } from "./torrent.ts";
-import type { CacheCtx } from "./play-cache-client.ts";
+import { persistMedia, type CacheCtx } from "./play-cache-client.ts";
 import { RANK_VERSION, type Playlist, type Quality, type StreamGroup, type StreamPick } from "./streams.ts";
 
 export { RANK_VERSION };
 
 export type { CacheCtx } from "./play-cache-client.ts";
-export { withCacheParams } from "./play-cache-client.ts";
+export { persistMedia, withCacheParams } from "./play-cache-client.ts";
 
 function cacheRoot() {
   return process.env.LACRIMA_CACHE ?? join(process.cwd(), "data", "cache", "anime");
@@ -64,6 +65,7 @@ export function chapterSlug(chapterId: string): string {
 }
 
 export function torrentStore(via: string, mediaId: number): string {
+  if (!persistMedia()) return join(tmpdir(), "lacrima-torrents", `${via}-${mediaId}`);
   return join(animeDir(via, mediaId), "torrents");
 }
 
@@ -73,7 +75,7 @@ export function mediaDir(ctx: CacheCtx): string {
 
 export function ensureMediaDir(ctx: CacheCtx): string {
   const dir = mediaDir(ctx);
-  mkdirSync(dir, { recursive: true });
+  if (persistMedia()) mkdirSync(dir, { recursive: true });
   return dir;
 }
 
@@ -95,6 +97,7 @@ function picksPath(via: string, mediaId: number) {
 }
 
 function readPicks(via: string, mediaId: number): PicksFile {
+  if (!persistMedia()) return {};
   try {
     return JSON.parse(readFileSync(picksPath(via, mediaId), "utf8")) as PicksFile;
   } catch {
@@ -103,6 +106,7 @@ function readPicks(via: string, mediaId: number): PicksFile {
 }
 
 function writePicks(via: string, mediaId: number, data: PicksFile) {
+  if (!persistMedia()) return;
   mkdirSync(animeDir(via, mediaId), { recursive: true });
   writeFileSync(picksPath(via, mediaId), JSON.stringify(data, null, 2));
 }
@@ -120,7 +124,7 @@ function playlistPath(ctx: CacheCtx) {
 }
 
 export function savePlaylist(ctx: CacheCtx, pl: Playlist) {
-  if (!pl.groups.length) return;
+  if (!persistMedia() || !pl.groups.length) return;
   try {
     ensureMediaDir(ctx);
     writeFileSync(playlistPath(ctx), JSON.stringify({ ...pl, v: RANK_VERSION }));
@@ -130,6 +134,7 @@ export function savePlaylist(ctx: CacheCtx, pl: Playlist) {
 }
 
 export function loadPlaylist(ctx: CacheCtx): Playlist | null {
+  if (!persistMedia()) return null;
   try {
     const pl = JSON.parse(readFileSync(playlistPath(ctx), "utf8")) as Playlist & { v?: number };
     if (pl?.v !== RANK_VERSION) return null;
@@ -164,6 +169,7 @@ function forget(ctx: CacheCtx) {
  * the player believes the episode is three minutes long, forever.
  */
 export function cachedFileStat(ctx: CacheCtx) {
+  if (!persistMedia()) return null;
   const key = statKey(ctx);
   const memo = stats.get(key);
   if (memo && (memo.hit || Date.now() - memo.at < MISS_TTL_MS)) return memo.hit;
@@ -180,6 +186,7 @@ export function hasVideo(ctx: CacheCtx): boolean {
 export const hasLocalVideo = hasVideo;
 
 export function discardPart(ctx: CacheCtx) {
+  if (!persistMedia()) return;
   try {
     if (existsSync(partPath(ctx))) unlinkSync(partPath(ctx));
   } catch {
@@ -189,6 +196,7 @@ export function discardPart(ctx: CacheCtx) {
 
 /** Promote a mirrored download only when its size matches what upstream promised. */
 export function promotePart(ctx: CacheCtx, expected: number | null) {
+  if (!persistMedia()) return;
   const part = partPath(ctx);
   if (!existsSync(part)) return;
   if (expected == null || statSync(part).size !== expected) {
@@ -203,6 +211,7 @@ export function promotePart(ctx: CacheCtx, expected: number | null) {
 
 /** Adopt a torrent file that has finished downloading, so a rewatch needs no peers. */
 export function adoptCompleted(ctx: CacheCtx, src: string, replace = false) {
+  if (!persistMedia()) return;
   const video = videoPath(ctx);
   if ((!replace && existsSync(video)) || !existsSync(src)) return;
   try {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { playFileArgs, remuxArgs, subtitleTracksFromProbe } from "./remux.ts";
+import { playFileArgs, remuxArgs, selfRelayUrl, subtitleTracksFromProbe } from "./remux.ts";
 
 const at = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
 const maps = (args: string[]) =>
@@ -26,9 +26,27 @@ test("the requested language is required so a wrong track cannot silently play",
   ]);
 });
 
+test("ffmpeg reads this process over loopback HTTP, not the public HTTPS name", () => {
+  const prev = process.env.PORT;
+  process.env.PORT = "3000";
+  try {
+    assert.equal(
+      selfRelayUrl("https://0.0.0.0:3000/api/stream?ih=aa&remux=1"),
+      "http://127.0.0.1:3000/api/stream?ih=aa&remux=1",
+    );
+    assert.equal(
+      selfRelayUrl("https://host.example.ts.net/api/stream?url=https://cdn.example/ep.mkv"),
+      "http://127.0.0.1:3000/api/stream?url=https://cdn.example/ep.mkv",
+    );
+  } finally {
+    if (prev == null) delete process.env.PORT;
+    else process.env.PORT = prev;
+  }
+});
+
 test("an episode start copies video and ffmpeg writes one normalized output timeline", () => {
   const args = remuxArgs("http://relay/x", { lang: "ja" });
-  assert.equal(at(args, "-c:v"), "copy", "video must never be re-encoded");
+  assert.equal(at(args, "-c:v"), "copy", "normal playback must not be re-encoded");
   assert.equal(at(args, "-c:a"), "aac");
   assert.equal(args.includes("-af"), false);
   assert.equal(args.includes("-copyts"), false);
@@ -41,18 +59,32 @@ test("an episode start copies video and ffmpeg writes one normalized output time
   assert.match(at(args, "-movflags"), /empty_moov/);
   assert.equal(args.at(-1), "pipe:1");
 
+  const ts = remuxArgs("http://relay/x", { lang: "ja", pack: "ts" });
+  assert.equal(at(ts, "-f"), "mpegts");
+  assert.equal(ts.includes("-movflags"), false);
+  assert.equal(ts.at(-1), "pipe:1");
+
   const copy = remuxArgs("C:/cache/video", { lang: "ja", copyAudio: true });
   assert.equal(at(copy, "-c:a"), "copy");
   assert.equal(copy.includes("-reconnect"), false);
 });
 
+test("a rejected Android codec can be normalized to broadly-supported H.264", () => {
+  const args = remuxArgs("http://relay/x", { lang: "ja", transcodeVideo: true, pack: "ts" });
+  assert.equal(at(args, "-c:v"), "libx264");
+  assert.equal(at(args, "-pix_fmt"), "yuv420p");
+  assert.equal(at(args, "-profile:v"), "high");
+  assert.equal(at(args, "-f"), "mpegts");
+});
+
 test("a seek is applied before the input, so it is a seek and not a wait", () => {
-  const args = remuxArgs("http://relay/x", { lang: "ja", seek: 578 });
+  const args = remuxArgs("http://relay/x", { lang: "ja", seek: 578, copyAudio: true });
   const ss = args.indexOf("-ss");
   const i = args.indexOf("-i");
   assert.ok(ss > -1 && ss < i, "-ss must precede -i for keyframe seeking");
   assert.equal(at(args, "-ss"), "578");
   assert.equal(at(args, "-c:v"), "libx264", "a copied GOP would precede the re-encoded audio");
+  assert.equal(at(args, "-c:a"), "aac", "seeked audio needs the same zero-based timeline");
   assert.equal(at(args, "-preset"), "veryfast");
 
   // No seek at the start of an episode: the flag is absent, not "0".

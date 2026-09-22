@@ -8,6 +8,7 @@ import {
   adoptCompleted,
   animeDir,
   boostPlaylist,
+  cachedFileStat,
   chapterSlug,
   commitPick,
   ensureMediaDir,
@@ -37,6 +38,33 @@ test("chapter slugs are stable", () => {
   const b = chapterSlug("com.addon::tt1:1:5");
   assert.equal(a, b);
   assert.notEqual(a, chapterSlug("com.addon::tt1:1:6"));
+});
+
+test("episode files are not kept on disk by default", () => {
+  const cache = process.env.LACRIMA_CACHE;
+  const persist = process.env.LACRIMA_CACHE_PERSIST;
+  delete process.env.LACRIMA_CACHE;
+  delete process.env.LACRIMA_CACHE_PERSIST;
+  try {
+    const ctx = { via: "kitsu" as const, mediaId: 1, chapterId: "x" };
+    savePlaylist(ctx, {
+      groups: [{
+        id: "1080p-ja",
+        quality: "1080p",
+        lang: "ja",
+        label: "1080p · Japanese",
+        picks: [{ url: "/api/stream?ih=aa", provider: "A" }],
+      }],
+      preferred: "1080p-ja",
+    });
+    assert.equal(loadPlaylist(ctx), null);
+    assert.equal(cachedFileStat(ctx), null);
+  } finally {
+    if (cache) process.env.LACRIMA_CACHE = cache;
+    else delete process.env.LACRIMA_CACHE;
+    if (persist) process.env.LACRIMA_CACHE_PERSIST = persist;
+    else delete process.env.LACRIMA_CACHE_PERSIST;
+  }
 });
 
 test("commit only lands after an explicit write", () => {

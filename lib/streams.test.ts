@@ -322,6 +322,12 @@ test("srcDeadlineMs is short on warm tries and bounded on a fresh race", () => {
   /* A mixed race holds a direct link that answers in about a second; inheriting
      the torrent budget meant 45s spent on a host that stalls on a resume seek. */
   assert.equal(srcDeadlineMs(`${race}&url=https%3A%2F%2Fcdn.example%2Fep.mkv`), 15_000);
+  assert.equal(
+    srcDeadlineMs(`${race}&url=https%3A%2F%2Fcdn.example%2Fep.mkv&remux=1&cv=anilist`),
+    15_000,
+  );
+  assert.equal(srcDeadlineMs("/api/stream?ih=aa&remux=1&cv=anilist"), 45_000);
+  assert.equal(srcDeadlineMs("/api/stream?remux=1&cv=anilist"), 120_000);
 });
 
 test("torrent picks in one bucket become a single race URL", () => {

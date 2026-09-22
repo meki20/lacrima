@@ -10,12 +10,14 @@ export function nextUpCountdown(opts: {
   position: number;
   duration: number | null;
   ended: boolean;
+  outro: { start: number; end: number } | null;
   watchedSeconds: number;
   cancelled: boolean;
   hasNext: boolean;
 }): number | null {
   if (!opts.hasNext || opts.cancelled || opts.watchedSeconds < 30) return null;
   if (opts.duration == null || opts.duration < 90) return null;
+  if (opts.outro && opts.position >= opts.outro.start && opts.position < opts.outro.end) return 0;
   if (!opts.ended || opts.position < opts.duration - NEXT_UP_SECONDS) return null;
   return 0;
 }

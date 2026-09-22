@@ -17,12 +17,22 @@ export const backend = (kind: MediaKind): SourceBackend => BACKENDS[kind] ?? suw
 
 const LANGS = (process.env.LACRIMA_LANGS ?? "en,all").split(",").map((s) => s.trim().toLowerCase());
 
+/** `*` means every language. `all` is a source lang code (MangaDex "all"), not a wildcard. */
 export function langMatches(lang: string, langs = LANGS): boolean {
-  if (langs.includes("all")) return true;
+  if (langs.includes("*")) return true;
   const l = lang.toLowerCase();
-  if (langs.some((w) => l === w || l.startsWith(`${w}-`) || l.startsWith(`${w},`))) return true;
+  if (langs.some((w) => w !== "*" && (l === w || l.startsWith(`${w}-`) || l.startsWith(`${w},`)))) {
+    return true;
+  }
   if (langs.includes("en") && (l === "en" || l.includes("english"))) return true;
   return false;
+}
+
+function langPref(lang: string): number {
+  const l = lang.toLowerCase();
+  if (l === "en" || l.startsWith("en-") || l.startsWith("en,") || l.includes("english")) return 0;
+  if (l === "all") return 1;
+  return 2;
 }
 
 export function pickSearchable<T extends { isLocal: boolean; lang: string; id: string; kind: MediaKind }>(
@@ -32,7 +42,8 @@ export function pickSearchable<T extends { isLocal: boolean; lang: string; id: s
     .filter(
       (s) => !s.isLocal && langMatches(s.lang) && !isSourceDisabled(s.kind, s.id),
     )
-    .slice(0, 6);
+    .sort((a, b) => langPref(a.lang) - langPref(b.lang))
+    .slice(0, 8);
 }
 
 const HEALTH_TTL_MS = 20_000;

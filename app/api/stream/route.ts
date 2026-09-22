@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
@@ -7,7 +7,7 @@ import { Readable } from "node:stream";
 import { PLAYLIST_TYPE, isPlaylist, rewritePlaylist } from "@/lib/hls";
 import { mimeForPath, playableType, readFileRange } from "@/lib/local-video";
 import { parseLang, parseLangToken, type Lang } from "@/lib/audio";
-import { ensurePlayFile, probeAudio, probeSubtitleTracks, remuxStream } from "@/lib/remux";
+import { probeAudio, probeSubtitleTracks, remuxStream, selfRelayUrl } from "@/lib/remux";
 import {
   adoptCompleted,
   cachedFileStat,
@@ -19,6 +19,7 @@ import {
   promotePart,
   torrentStore,
   hasVideo,
+  persistMedia,
   type CacheCtx,
 } from "@/lib/play-cache";
 import {
@@ -120,7 +121,7 @@ function adoptWhenComplete(
   file: { path: string },
   replace = false,
 ) {
-  if (!ctx || (!replace && hasVideo(ctx))) return;
+  if (!persistMedia() || !ctx || (!replace && hasVideo(ctx))) return;
   const key = `${ctx.via}|${ctx.mediaId}|${ctx.chapterId}|${ih}|${replace}`;
   if (adopting.has(key)) return;
   adopting.add(key);
@@ -254,7 +255,7 @@ function teeHttp(
   total: number | null,
   replace = false,
 ) {
-  if (offset !== 0 || total == null || (!replace && hasVideo(ctx))) return body;
+  if (!persistMedia() || offset !== 0 || total == null || (!replace && hasVideo(ctx))) return body;
   ensureMediaDir(ctx);
   let fh: Awaited<ReturnType<typeof open>> | null = null;
   let written = 0;
@@ -590,23 +591,19 @@ async function fromRemux(req: Request, u: URL): Promise<Response> {
   inner.searchParams.delete("lang");
   inner.searchParams.delete("sub");
   inner.searchParams.delete("t");
+  inner.searchParams.delete("pack");
+  inner.searchParams.delete("video");
+  const pack = u.searchParams.get("pack") === "ts" ? "ts" as const : undefined;
+  const transcodeVideo = u.searchParams.get("video") === "h264";
   const lang = parseLang(u.searchParams.get("lang")) ?? undefined;
   const seek = Math.max(0, Number(u.searchParams.get("t") ?? 0) || 0);
+  const tryN = Math.max(0, Number(u.searchParams.get("try") ?? 0) || 0);
   const alternatives = inner.searchParams.getAll("alt");
   inner.searchParams.delete("alt");
   const candidates: URL[] = [];
-  /* A byte race cannot know whether its winner carries the requested track.
-     Validate direct candidates one by one, then retain the torrent lane as the
-     final fallback. This avoids repeatedly letting the same Italian HTTP file
-     beat every Japanese torrent on connection speed alone. */
-  if (lang && inner.searchParams.has("url") && inner.searchParams.has("ih")) {
-    const direct = new URL(inner);
-    direct.searchParams.delete("ih");
-    direct.searchParams.delete("i");
-    candidates.push(direct);
-  } else {
-    candidates.push(inner);
-  }
+  /* HTTP files are probed for the requested audio, then the mixed URL is remuxed
+     so torrents can still win. A warm `try=` is already a torrent from that race. */
+  candidates.push(inner);
   for (const rawAlt of alternatives) {
     const alt = new URL(rawAlt, "http://lacrima.local");
     const candidate = new URL(inner);
@@ -649,38 +646,53 @@ async function fromRemux(req: Request, u: URL): Promise<Response> {
       local = null;
       candidate.searchParams.set("replace", "1");
     }
-    const input = local ?? candidate.toString();
+    if (local && candidateCtx && lang) {
+      const dest = playPath(candidateCtx, lang);
+      if (existsSync(dest) && statSync(dest).size > 1024) {
+        const served = fileResponse(req, dest);
+        if (served) return served;
+      }
+    }
+    /* A mid-episode remux of the on-disk file re-encodes from that timestamp.
+       That is why a resume waited a minute while a fresh episode (copy from
+       zero, racing HTTP against torrents) started in seconds. */
+    if (seek > 0) local = null;
+    const input = local ?? selfRelayUrl(candidate);
+    const mixed = candidate.searchParams.has("url") && candidate.searchParams.has("ih");
+    /*
+     * Probe the HTTP side alone. ffprobe on the mixed URL would start a second
+     * race, and the two winners need not agree. After the language check, ffmpeg
+     * opens the mixed URL so torrents can still beat a slow-but-valid direct link.
+     */
+    let probeUrl = input;
+    if (mixed && !local) {
+      const direct = new URL(candidate);
+      direct.searchParams.delete("ih");
+      direct.searchParams.delete("i");
+      probeUrl = selfRelayUrl(direct);
+    }
     const probedAudio =
-      lang && (local || candidate.searchParams.has("url"))
-        ? await probeAudio(input, lang, local ? null : candidateReferer, req.signal)
+      lang && tryN === 0 && (local || candidate.searchParams.has("url"))
+        ? await probeAudio(probeUrl, lang, local ? null : candidateReferer, req.signal)
         : undefined;
-    if (lang && candidate.searchParams.has("url") && !local && probedAudio == null) {
+    if (tryN === 0 && lang && candidate.searchParams.has("url") && !local && probedAudio == null) {
       lastError = `This source has no ${lang} audio track`;
       continue;
-    }
-    if (local && candidateCtx && lang) {
-      try {
-        ensureMediaDir(candidateCtx);
-        const dest = playPath(candidateCtx, lang);
-        const play = await ensurePlayFile(local, dest, {
-          lang,
-          audioIndex: probedAudio?.index,
-          copyAudio: probedAudio?.copyAudio,
-        });
-        const served = fileResponse(req, play);
-        if (served) return served;
-      } catch (e) {
-        lastError = e instanceof Error ? e.message : "Play remux failed";
-      }
     }
     const raw = remuxStream(
       input,
       {
         lang,
-        audioIndex: probedAudio?.index,
-        copyAudio: probedAudio?.copyAudio,
+        /* A mixed race may be won by a different file than the HTTP source we
+           probed. Its numeric stream indexes and codecs are unrelated, so let
+           ffmpeg select the requested language from the actual winner and
+           normalize that winner's audio. */
+        audioIndex: mixed ? undefined : probedAudio?.index,
+        copyAudio: mixed ? false : probedAudio?.copyAudio,
         seek,
         referer: local ? null : candidateReferer,
+        pack,
+        transcodeVideo,
       },
       req.signal,
     );
@@ -711,7 +723,7 @@ async function fromRemux(req: Request, u: URL): Promise<Response> {
       return new Response(body, {
         status: 200,
         headers: {
-          "content-type": "video/mp4",
+          "content-type": pack === "ts" ? "video/mp2t" : "video/mp4",
           "cache-control": "no-store",
           /* Say so explicitly: a live pipe cannot answer a byte range, and a player
              that believes otherwise will ask for one and stall. */

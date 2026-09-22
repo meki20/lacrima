@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { loadSubBody, loadSubIndex, saveSubIndex, subBodyPath } from "./sub-cache.ts";
+import { decodeSubBytes, loadSubBody, loadSubIndex, saveSubIndex, subBodyPath } from "./sub-cache.ts";
 import { mediaDir } from "./play-cache.ts";
 
 async function scratch(fn: () => void | Promise<void>) {
@@ -76,4 +76,44 @@ test("legacy array indexes are stale so a bad first fetch does not stick forever
     writeFileSync(file, JSON.stringify({ at: Date.now(), cues: [cue] }));
     assert.equal(loadSubIndex(ctx)[0]?.url, cue.url);
   });
+});
+
+test("embedded: urls are served from disk without an http fetch", async () => {
+  await scratch(async () => {
+    const url = "embedded:11:22:0.srt";
+    const dest = subBodyPath(ctx, url);
+    mkdirSync(join(dest, ".."), { recursive: true });
+    writeFileSync(dest, "1\n00:00:01,000 --> 00:00:02,000\nHi\n");
+    const buf = await loadSubBody(ctx, url);
+    assert.equal(new TextDecoder().decode(buf!), "1\n00:00:01,000 --> 00:00:02,000\nHi\n");
+  });
+});
+
+test("utf-16 subtitle files decode to text", () => {
+  const le = Buffer.from("\ufeff1\n00:00:01,000 --> 00:00:02,000\nHi\n", "utf16le");
+  assert.match(decodeSubBytes(le), /Hi/);
+  const utf8 = new TextEncoder().encode("Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hi");
+  assert.match(decodeSubBytes(utf8), /Dialogue:/);
+});
+
+test("subtitle files go to tmp when media persist is off", async () => {
+  const cache = process.env.LACRIMA_CACHE;
+  const persist = process.env.LACRIMA_CACHE_PERSIST;
+  delete process.env.LACRIMA_CACHE;
+  process.env.LACRIMA_CACHE_PERSIST = "0";
+  const isolated = { ...ctx, chapterId: `ep-tmp-${Date.now()}` };
+  try {
+    saveSubIndex(isolated, [cue]);
+    const dest = subBodyPath(isolated, cue.url);
+    assert.match(dest.replace(/\\/g, "/"), /lacrima-subs/);
+    assert.equal(loadSubIndex(isolated)[0]?.url, cue.url);
+    writeFileSync(dest, "1\n00:00:01,000 --> 00:00:02,000\nHi\n");
+    const buf = await loadSubBody(isolated, cue.url);
+    assert.equal(new TextDecoder().decode(buf!), "1\n00:00:01,000 --> 00:00:02,000\nHi\n");
+  } finally {
+    if (cache) process.env.LACRIMA_CACHE = cache;
+    else delete process.env.LACRIMA_CACHE;
+    if (persist) process.env.LACRIMA_CACHE_PERSIST = persist;
+    else delete process.env.LACRIMA_CACHE_PERSIST;
+  }
 });

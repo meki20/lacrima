@@ -1,10 +1,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebTorrent from "webtorrent";
+import { persistMedia } from "./play-cache-client.ts";
 
 const HASH = /^[a-fA-F0-9]{40}$/;
 const VIDEO = /\.(mp4|mkv|webm|m4v|avi|mov|ts)$/i;
-const DIR = join(process.cwd(), "data", "torrents");
+export function torrentRoot() {
+  return persistMedia()
+    ? join(process.cwd(), "data", "torrents")
+    : join(tmpdir(), "lacrima-torrents");
+}
 const TRACKERS = [
   "udp://tracker.opentrackr.org:1337/announce",
   "udp://open.stealth.si:80/announce",
@@ -30,6 +36,8 @@ type TorrentFile = {
 
 type Torrent = {
   infoHash: string;
+  /** Download directory this swarm was added with. */
+  path: string;
   ready: boolean;
   done: boolean;
   downloaded: number;
@@ -43,6 +51,42 @@ type Torrent = {
   removeListener: (ev: string, fn: (...args: unknown[]) => void) => void;
   destroy: (opts?: { destroyStore?: boolean }) => void;
 };
+
+export type LiveTorrentMedia = {
+  path: string;
+  progress: number;
+  done: boolean;
+};
+
+/**
+ * The selected video of an already-running swarm, if any.
+ *
+ * Does not dial peers or wait on metadata — subtitle extraction polls this while
+ * playback is already feeding from the same torrent.
+ */
+export function peekTorrentMedia(
+  ih: string,
+  fileIdx: number | null,
+  want?: Slot,
+  store = torrentRoot(),
+): LiveTorrentMedia | null {
+  if (!HASH.test(ih) || !client) return null;
+  const t = client.torrents.find((x) => x.infoHash === ih.toLowerCase());
+  if (!t?.ready) return null;
+  try {
+    const file = fileFromTorrent(t, fileIdx, want);
+    const root = t.path || store;
+    const path = join(root, file.path);
+    if (!existsSync(path)) return null;
+    return {
+      path,
+      progress: file.progress,
+      done: Boolean(t.done || file.progress >= 1),
+    };
+  } catch {
+    return null;
+  }
+}
 
 /** How many torrents to connect at once while racing a quality bucket. */
 export const TORRENT_RACE_MAX = 6;
@@ -78,7 +122,7 @@ function magnet(ih: string) {
 
 function getClient(): Client {
   if (client) return client;
-  mkdirSync(DIR, { recursive: true });
+  mkdirSync(torrentRoot(), { recursive: true });
   client = new WebTorrent({
     utp: false,
     lsd: false,
@@ -216,8 +260,8 @@ export function finalizeRacePoolsForStore(store: string, keepIh?: string) {
 /** Snapshot warm torrents from an in-flight race for later `try=` failover. */
 export function snapshotRacePool(
   list: { ih: string; fileIdx: number | null }[],
-  store = DIR,
-  keepStore = store !== DIR,
+  store = torrentRoot(),
+  keepStore = persistMedia() && store !== torrentRoot(),
 ): RacePool | null {
   const wt = client;
   if (!wt) return null;
@@ -252,7 +296,7 @@ export function pickFromRacePool(
   list: { ih: string; fileIdx: number | null }[],
   tryN: number,
   want: Slot | undefined,
-  store = DIR,
+  store = torrentRoot(),
 ): { ih: string; file: TorrentFile } | null {
   const key = racePoolKey(
     list.map((x) => x.ih),
@@ -284,13 +328,14 @@ export function pickFromRacePool(
   }
 }
 
-/** Player left: detach peers. Per-anime cache stores are kept on disk. */
+/** Player left: detach peers. Disk copies stay only when persistMedia() is on. */
 export function dropTorrents(keepStore = false) {
+  const keep = persistMedia() && keepStore;
   for (const key of [...racePools.keys()]) finalizeRacePool(key);
   const wt = client;
   if (!wt) return;
-  for (const t of [...wt.torrents]) kill(t, !keepStore);
-  for (const p of pending.values()) void p.then((t) => kill(t, !keepStore), () => undefined);
+  for (const t of [...wt.torrents]) kill(t, !keep);
+  for (const p of pending.values()) void p.then((t) => kill(t, !keep), () => undefined);
   pending.clear();
 }
 
@@ -391,6 +436,7 @@ function loadMeta(store: string, ih: string): Uint8Array | null {
 }
 
 function saveMeta(store: string, ih: string, t: Torrent) {
+  if (!persistMedia()) return;
   try {
     const path = metaFile(store, ih);
     if (!existsSync(path) && t.torrentFile?.byteLength) writeFileSync(path, t.torrentFile);
@@ -399,7 +445,7 @@ function saveMeta(store: string, ih: string, t: Torrent) {
   }
 }
 
-async function addTorrent(ih: string, metaMs = 30_000, store = DIR): Promise<Torrent> {
+async function addTorrent(ih: string, metaMs = 30_000, store = torrentRoot()): Promise<Torrent> {
   if (!HASH.test(ih)) throw new Error("Bad info hash.");
   const key = ih.toLowerCase();
   mkdirSync(store, { recursive: true });
@@ -520,7 +566,7 @@ export async function raceTorrentFiles(
   pairs: { ih: string; fileIdx: number | null }[],
   want?: Slot,
   max = TORRENT_RACE_MAX,
-  store = DIR,
+  store = torrentRoot(),
 ): Promise<{ ih: string; file: TorrentFile }> {
   const seen = new Set<string>();
   const list: { ih: string; fileIdx: number | null }[] = [];
@@ -537,7 +583,7 @@ export async function raceTorrentFiles(
     return { ih: list[0].ih, file };
   }
 
-  const keepStore = store !== DIR;
+  const keepStore = persistMedia() && store !== torrentRoot();
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -574,17 +620,17 @@ export async function torrentFile(
   ih: string,
   fileIdx: number | null,
   want?: Slot,
-  store = DIR,
+  store = torrentRoot(),
 ): Promise<TorrentFile> {
   const key = ih.toLowerCase();
-  const keepStore = store !== DIR;
+  const keepStore = persistMedia() && store !== torrentRoot();
   dropOthers(key, keepStore);
   try {
     const t = await addTorrent(key, 30_000, store);
     return fileFromTorrent(t, fileIdx, want);
   } catch (e) {
-    if (store === DIR) throw e;
-    const t = await addTorrent(key, 30_000, DIR);
+    if (store === torrentRoot()) throw e;
+    const t = await addTorrent(key, 30_000, torrentRoot());
     return fileFromTorrent(t, fileIdx, want);
   }
 }

@@ -16,13 +16,20 @@ export async function GET(req: Request) {
     if (!via || !Number.isFinite(mediaId)) {
       return Response.json({ error: "Missing media context" }, { status: 400 });
     }
-    return Response.json({
-      cues: await resolveEmbeddedSubtitles({
-        via: via as ProviderSlug,
-        mediaId,
-        chapterId,
-      }),
-    });
+    const ih = u.searchParams.get("ih") ?? undefined;
+    const i = u.searchParams.get("i");
+    const season = Number(u.searchParams.get("s"));
+    const episode = Number(u.searchParams.get("e"));
+    const result = await resolveEmbeddedSubtitles(
+      { via: via as ProviderSlug, mediaId, chapterId },
+      {
+        ih,
+        fileIdx: i != null && i !== "" ? Number(i) : null,
+        season: Number.isFinite(season) && season > 0 ? season : undefined,
+        episode: Number.isFinite(episode) && episode > 0 ? episode : undefined,
+      },
+    );
+    return Response.json({ cues: result.cues, pending: result.pending });
   }
   const r = await resolveSubtitles(chapterId, {
     via: via as ProviderSlug | undefined,

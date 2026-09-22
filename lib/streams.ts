@@ -125,10 +125,14 @@ export function srcDeadlineMs(url: string): number {
    * resumes at 9:04, `bytes=0-2047` returned at once and the seek never came back.
    * The player cannot tell that apart from a slow start, so the budget is what
    * decides whether it recovers in fifteen seconds or looks broken for forty-five.
+   *
+   * Remux URLs carry `cv` for the on-disk cache. That used to force a two-minute
+   * wait on every mixed race, which is how a dead HTTP pick sat in front of a
+   * warm torrent pool for a full minute.
    */
-  if (u.searchParams.get("remux") === "1" && u.searchParams.has("cv")) return 120_000;
   if (u.searchParams.has("url") && u.searchParams.has("ih")) return 15_000;
   if (u.searchParams.has("ih")) return 45_000;
+  if (u.searchParams.get("remux") === "1" && u.searchParams.has("cv")) return 120_000;
   if (isScrape(u.searchParams.get("url") ?? "")) return 8_000;
   return 15_000;
 }

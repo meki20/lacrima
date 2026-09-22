@@ -1,7 +1,6 @@
 import { parseLang } from "@/lib/audio";
 import type { MediaKind, ProviderSlug } from "@/lib/media";
 import {
-  boostPlaylist,
   fastPlaylist,
   getCachedPick,
   hasLocalVideo,
@@ -47,22 +46,11 @@ export async function GET(req: Request) {
 
     /* The stored playlist is the fast path: no addon is contacted, and the whole
        quality/language menu survives instead of collapsing to the one pick that
-       happened to work. `forLang` runs last so boosting a Japanese pick cannot
-       override a request that asked for the English dub. */
+       happened to work. Ranked order is kept, so a resume races the same way a
+       first play did instead of pinning the last provider. */
     const saved = ctx && !fresh ? fromProviders(loadPlaylist(ctx), installed) : null;
     if (saved) {
-      return Response.json({
-        ...forLang(boostPlaylist(saved, pick), lang),
-        source: pick
-          ? { provider: pick.provider, cached: true, local: hasLocalVideo(ctx!) }
-          : undefined,
-      });
-    }
-    if (pick) {
-      return Response.json({
-        ...fastPlaylist(pick),
-        source: { provider: pick.provider, cached: true, local: hasLocalVideo(ctx!) },
-      });
+      return Response.json(forLang(saved, lang));
     }
 
     /* Memoised and already warm from the page render. The resolver needs it to
@@ -74,7 +62,15 @@ export async function GET(req: Request) {
       title: meta?.ok ? meta.value.title : undefined,
       fresh,
     });
-    if (!r.ok) return Response.json({ error: r.reason }, { status: 502 });
+    if (!r.ok) {
+      if (pick) {
+        return Response.json({
+          ...fastPlaylist(pick),
+          source: { provider: pick.provider, cached: true, local: hasLocalVideo(ctx!) },
+        });
+      }
+      return Response.json({ error: r.reason }, { status: 502 });
+    }
     if (ctx) savePlaylist(ctx, r.value);
     return Response.json(r.value);
   }

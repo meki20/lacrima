@@ -10,15 +10,31 @@
  * Everything goes through here, not just multi-audio files, because the same pass
  * also fixes audio the browser refuses outright — DDP, AC3, DTS, TrueHD — which
  * `browserPlayable` used to reject on sight, throwing away most of the best
- * releases. Video is *always* a stream copy: this is a remux, and the only thing
- * ever re-encoded is an audio track no browser can decode.
+ * releases. Video normally stays a stream copy. Android can explicitly request a
+ * baseline-compatible H.264 output after its decoder rejects a source codec or
+ * profile; that keeps the broad source pool usable without taxing normal playback.
  */
 import { spawn } from "node:child_process";
-import { existsSync, renameSync, statSync, unlinkSync } from "node:fs";
 import type { Lang } from "./audio.ts";
 
 export const FFMPEG = process.env.LACRIMA_FFMPEG ?? "ffmpeg";
 const FFPROBE = process.env.LACRIMA_FFPROBE ?? "ffprobe";
+const H264_ENCODER = process.env.LACRIMA_H264_ENCODER === "h264_nvenc" ? "h264_nvenc" : "libx264";
+
+/**
+ * ffmpeg talks to this same process one layer down. Behind Caddy the request URL
+ * is `https://0.0.0.0:3000/...` — TLS against a plain HTTP port, which surfaces
+ * as `wrong version number` and a 502 the player reports as IO_BAD_HTTP_STATUS.
+ */
+export function selfRelayUrl(url: URL | string): string {
+  const u = new URL(typeof url === "string" ? url : url.toString());
+  u.protocol = "http:";
+  u.hostname = "127.0.0.1";
+  u.port = process.env.PORT?.trim() || "3000";
+  u.username = "";
+  u.password = "";
+  return u.toString();
+}
 /**
  * `-ss` goes before `-i` so ffmpeg seeks by keyframe index instead of decoding up
  * to the point, which is the difference between a seek and a wait.
@@ -51,9 +67,12 @@ export function remuxArgs(
     copyAudio?: boolean;
     seek?: number;
     referer?: string | null;
+    pack?: "mp4" | "ts";
+    transcodeVideo?: boolean;
   },
 ): string[] {
   const http = /^https?:\/\//i.test(url);
+  const seeking = (opts.seek ?? 0) > 0;
   const args = [
     "-hide_banner",
     "-loglevel", "error",
@@ -62,7 +81,7 @@ export function remuxArgs(
       ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
       : []),
   ];
-  if (opts.seek && opts.seek > 0) args.push("-ss", String(opts.seek));
+  if (seeking) args.push("-ss", String(opts.seek));
   args.push("-i", url, "-map", "0:v:0");
 
   const iso = opts.lang ? ISO3[opts.lang] : null;
@@ -72,13 +91,19 @@ export function remuxArgs(
 
   /* Input -ss lands on a preceding keyframe. Stream-copy keeps those video
      frames while re-encoded audio starts at the requested time, so resumed
-     playback is visibly out of sync. Decode only a resumed video so ffmpeg's
-     normal accurate seek discards that GOP; an episode start stays a remux. */
-  if (opts.seek && opts.seek > 0) {
-    args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "18");
-  }
-  else args.push("-c:v", "copy");
-  if (opts.copyAudio) {
+     playback is visibly out of sync. Decode a resumed video, or one an Android
+     decoder has rejected, to broadly-supported 8-bit H.264. */
+  if (seeking || opts.transcodeVideo) {
+    if (H264_ENCODER === "h264_nvenc") {
+      args.push("-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "23", "-b:v", "0");
+    } else {
+      args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", seeking ? "18" : "20");
+    }
+    args.push("-pix_fmt", "yuv420p", "-profile:v", "high");
+  } else args.push("-c:v", "copy");
+  /* A seek must rebuild the audio timeline too. Copying AAC here preserves its
+     old timestamps, leaving the new zero-based video silent after a restart. */
+  if (opts.copyAudio && !seeking) {
     args.push("-c:a", "copy");
   } else {
     args.push("-c:a", "aac", "-b:a", "192k", "-ac", "2");
@@ -90,10 +115,17 @@ export function remuxArgs(
        the selected audio was encoded onto the new timeline. */
     "-muxdelay", "0",
     "-muxpreload", "0",
-    "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-    "-f", "mp4",
-    "pipe:1",
   );
+  if (opts.pack === "ts") {
+    /* Native players ingest a live MPEG-TS pipe. MSE on the web needs fMP4. */
+    args.push("-f", "mpegts", "pipe:1");
+  } else {
+    args.push(
+      "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+      "-f", "mp4",
+      "pipe:1",
+    );
+  }
   return args;
 }
 
@@ -122,52 +154,6 @@ export function playFileArgs(
     "-movflags", "+faststart",
     dest,
   ];
-}
-
-const playJobs = new Map<string, Promise<string>>();
-
-export function ensurePlayFile(
-  src: string,
-  dest: string,
-  opts: { lang?: Lang; audioIndex?: number; copyAudio?: boolean },
-): Promise<string> {
-  if (existsSync(dest) && statSync(dest).size > 1024) return Promise.resolve(dest);
-  const running = playJobs.get(dest);
-  if (running) return running;
-  const job = new Promise<string>((resolve, reject) => {
-    const tmp = `${dest}.part`;
-    try {
-      if (existsSync(tmp)) unlinkSync(tmp);
-    } catch {
-      /* leftover */
-    }
-    const child = spawn(FFMPEG, playFileArgs(src, tmp, opts), { windowsHide: true });
-    let stderr = "";
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      stderr = (stderr + chunk).slice(-2_048);
-    });
-    child.on("error", (err) => {
-      playJobs.delete(dest);
-      reject(err);
-    });
-    child.on("close", (code) => {
-      playJobs.delete(dest);
-      if (code === 0 && existsSync(tmp) && statSync(tmp).size > 1024) {
-        renameSync(tmp, dest);
-        resolve(dest);
-        return;
-      }
-      try {
-        if (existsSync(tmp)) unlinkSync(tmp);
-      } catch {
-        /* leftover */
-      }
-      reject(new Error(stderr.trim() || `play remux exited ${code ?? "?"}`));
-    });
-  });
-  playJobs.set(dest, job);
-  return job;
 }
 
 export type SubtitleTrack = {
@@ -208,7 +194,7 @@ export function probeSubtitleTracks(
 ): Promise<SubtitleTrack[]> {
   const http = /^https?:\/\//i.test(url);
   const child = spawn(
-    FFPROBE,
+    /* turbopackIgnore: true */ FFPROBE,
     [
       "-v", "error",
       ...(referer && http ? ["-headers", `Referer: ${referer}\r\n`] : []),
@@ -252,7 +238,7 @@ export function probeAudio(
 ): Promise<{ index: number; copyAudio: boolean } | null> {
   const http = /^https?:\/\//i.test(url);
   const child = spawn(
-    FFPROBE,
+    /* turbopackIgnore: true */ FFPROBE,
     [
       "-v", "error",
       ...(referer && http ? ["-headers", `Referer: ${referer}\r\n`] : []),
@@ -327,10 +313,12 @@ export function remuxStream(
     copyAudio?: boolean;
     seek?: number;
     referer?: string | null;
+    pack?: "mp4" | "ts";
+    transcodeVideo?: boolean;
   },
   signal?: AbortSignal,
 ): ReadableStream<Uint8Array> {
-  const child = spawn(FFMPEG, remuxArgs(url, opts), { windowsHide: true });
+  const child = spawn(/* turbopackIgnore: true */ FFMPEG, remuxArgs(url, opts), { windowsHide: true });
   let stderr = "";
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {

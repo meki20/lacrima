@@ -7,6 +7,7 @@ test("next-up waits for a credible end, never a catalog-runtime estimate", () =>
     position: 1425,
     duration: 1440,
     ended: false,
+    outro: null,
     watchedSeconds: 200,
     cancelled: false,
     hasNext: true,
@@ -23,6 +24,21 @@ test("next-up waits for a credible end, never a catalog-runtime estimate", () =>
   assert.equal(nextUpCountdown({ ...base, hasNext: false }), null);
   assert.equal(nextUpCountdown({ ...base, cancelled: true }), null);
   assert.equal(nextUpCountdown({ ...base, ended: true, watchedSeconds: 5 }), null);
+});
+
+test("next-up is available while a marked outro is playing", () => {
+  const base = {
+    position: 1320,
+    duration: 1440,
+    ended: false,
+    outro: { start: 1300, end: 1390 },
+    watchedSeconds: 200,
+    cancelled: false,
+    hasNext: true,
+  };
+  assert.equal(nextUpCountdown(base), 0);
+  assert.equal(nextUpCountdown({ ...base, position: 1299 }), null);
+  assert.equal(nextUpCountdown({ ...base, position: 1390 }), null);
 });
 
 test("toggleSubChoice restores the last file, not a random language", () => {

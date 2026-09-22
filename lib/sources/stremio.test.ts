@@ -153,7 +153,17 @@ test("the wanted slot comes from the video id", () => {
   assert.deepEqual(wantedSlot("tt2560140:3:7"), { season: 3, episode: 7 });
   assert.deepEqual(wantedSlot("tt2560140:0:1"), { season: 1, episode: 1 });
   assert.deepEqual(wantedSlot("kitsu:7442:12"), { season: 1, episode: 12 });
+  assert.deepEqual(wantedSlot("anilist:269:1"), { season: 1, episode: 1 });
+  assert.deepEqual(wantedSlot("anilist:269-1"), { season: 1, episode: 1 });
+  assert.deepEqual(wantedSlot("mal:269:1"), { season: 1, episode: 1 });
   assert.equal(wantedSlot("ap:some-slug"), undefined);
+});
+
+test("hyphenated anime episodes still reach mapped stream addons", () => {
+  assert.deepEqual(
+    extraStreamIds("anilist:269-2", { ids: { anilist: 269, kitsu: 244, mal: 269 } }),
+    ["kitsu:244:2", "mal:269:2", "anilist:269-2"],
+  );
 });
 
 test("stream titles are read for the episode they actually contain", () => {

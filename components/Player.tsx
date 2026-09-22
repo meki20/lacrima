@@ -13,7 +13,6 @@ import { LANGS, pickAudioTrack, type Lang } from "@/lib/audio";
 import {
   cueAt,
   cueByChoice,
-  dedupeCues,
   fileHref,
   parseCues,
   parseSubSync,
@@ -73,6 +72,12 @@ import {
 } from "@vidstack/react";
 
 const langLabel = (id: Lang) => LANGS.find((l) => l.id === id)?.label ?? id;
+
+type SkipSegment = { type: "op" | "ed" | "mixed-op" | "mixed-ed" | "recap"; start: number; end: number };
+
+const skipLabel = (type: SkipSegment["type"]) =>
+  type === "op" ? "Opening" : type === "ed" ? "Ending" : type === "recap" ? "Recap" :
+    type === "mixed-op" ? "Mixed opening" : "Mixed ending";
 
 function Icon({ d, filled = true }: { d: string; filled?: boolean }) {
   return (
@@ -165,11 +170,13 @@ function RemuxTimeline({
   position,
   duration,
   buffered,
+  segments,
   onSeek,
 }: {
   position: number;
   duration: number | null;
   buffered: number;
+  segments: SkipSegment[];
   onSeek: (seconds: number) => void;
 }) {
   const [draft, setDraft] = useState<number | null>(null);
@@ -199,6 +206,21 @@ function RemuxTimeline({
           <div className="scrub-fill" />
         </div>
         <span className="scrub-thumb" />
+        {segments.flatMap((segment) => [
+          { at: segment.start, edge: "starts" },
+          { at: segment.end, edge: "ends" },
+        ]).map(({ at, edge }, index) => (
+          <button
+            key={`${index}:${at}`}
+            type="button"
+            className="skip-marker"
+            style={{ "--marker-at": `${(at / duration) * 100}%` } as CSSProperties}
+            aria-label={`Seek to ${skipLabel(segments[Math.floor(index / 2)].type)} ${edge}`}
+            title={`${skipLabel(segments[Math.floor(index / 2)].type)} ${edge}`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => onSeek(at)}
+          />
+        ))}
         <input
           className="remux-range"
           type="range"
@@ -285,6 +307,7 @@ export default function Player({
   const [bufferedPct, setBufferedPct] = useState(0);
   const [ended, setEnded] = useState(false);
   const [nextCancelled, setNextCancelled] = useState(false);
+  const [skipSegments, setSkipSegments] = useState<SkipSegment[]>([]);
   const [cues, setCues] = useState<SubCue[]>([]);
   const [subErr, setSubErr] = useState<string | null>(null);
   const [subLoading, setSubLoading] = useState(true);
@@ -470,6 +493,29 @@ export default function Player({
       live = false;
     };
   }, [progress.chapterId, progress.via, progress.mediaId, subFresh]);
+
+  useEffect(() => {
+    const episode = progress.episode;
+    if (!episode) {
+      setSkipSegments([]);
+      return;
+    }
+    const controller = new AbortController();
+    const query = new URLSearchParams({
+      via: progress.via,
+      mediaId: String(progress.mediaId),
+      episode: String(episode),
+    });
+    fetch(`/api/skip-times?${query}`, { signal: controller.signal })
+      .then((r) => r.ok ? r.json() : { segments: [] })
+      .then((data: { segments?: SkipSegment[] }) => {
+        if (!controller.signal.aborted) setSkipSegments(data.segments ?? []);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setSkipSegments([]);
+      });
+    return () => controller.abort();
+  }, [progress.episode, progress.mediaId, progress.via]);
 
   const group = groups.find((g) => g.id === gid) ?? groups[0];
   const wantedSub: Lang | undefined =
@@ -735,28 +781,24 @@ export default function Player({
   };
 
   const onResumeHold = () => {
-    if (native.current || (useMse && !mse.failed)) {
+    if (native.current) {
       pausedAt.current = null;
       return;
     }
     const want = pausedAt.current;
     if (want == null) return;
-    const finish = (elapsed: number) => {
+    /* A remux can reopen at its original URL when playback resumes. That URL is
+       `t=0` on a first watch, so check after the browser has had a frame to
+       reset its clock and restore the pause point only when it actually did. */
+    requestAnimationFrame(() => {
+      const elapsed = mediaTime();
       if (elapsed > 1) {
         pausedAt.current = null;
         return;
       }
       pausedAt.current = null;
       seekToRef.current(want);
-    };
-    const elapsed = mediaTime();
-    /* Some engines still report the pause time on play, then reset the remux
-       clock to zero. Wait one frame before deciding this is a real unpause. */
-    if (elapsed > 1) {
-      requestAnimationFrame(() => finish(mediaTime()));
-      return;
-    }
-    finish(elapsed);
+    });
   };
 
   /* Progress is a side effect of watching, never a step in it: this reads position
@@ -886,10 +928,10 @@ export default function Player({
     setSubLang(pickSubLang(cues, audioLang, settings.subtitle_lang));
   }, [cues, subLoading, audioLang, settings.subtitle_lang]);
 
-  /* The chosen torrent can carry the only matching subtitles. They become
-     extractable once its complete local copy lands, so keep looking briefly. */
+  /* Softsubs inside the torrent become readable as early clusters land — keep
+     polling and refresh the growing extract until the file is complete. */
   useEffect(() => {
-    if (subLoading || !wantedSub || cues.some((c) => c.lang === wantedSub)) return;
+    if (subLoading || !wantedSub) return;
     let live = true;
     let busy = false;
     let attempts = 0;
@@ -899,18 +941,37 @@ export default function Player({
       mediaId: String(progress.mediaId),
       local: "1",
     });
+    const torrent = pick?.url ? new URL(pick.url, "http://lacrima.local") : null;
+    const ih = torrent?.searchParams.get("ih");
+    if (ih) {
+      q.set("ih", ih);
+      const i = torrent!.searchParams.get("i");
+      if (i != null && i !== "") q.set("i", i);
+      const s = torrent!.searchParams.get("s");
+      const e = torrent!.searchParams.get("e");
+      if (s) q.set("s", s);
+      if (e) q.set("e", e);
+    }
     const find = async () => {
-      if (!live || busy || attempts++ >= 12) return;
+      if (!live || busy || attempts++ >= 360) return;
       busy = true;
       try {
         const r = await fetch(`/api/subs?${q}`);
-        const j = (await r.json()) as { cues?: SubCue[] };
-        if (!live || !r.ok || !j.cues?.length) return;
-        setCues((old) => {
-          const next = dedupeCues([...old, ...j.cues!]);
-          return next.length === old.length ? old : next;
-        });
-        if (j.cues.some((cue) => cue.lang === wantedSub)) clearInterval(timer);
+        const j = (await r.json()) as { cues?: SubCue[]; pending?: boolean };
+        if (!live || !r.ok) return;
+        if (j.cues?.length) {
+          setCues((old) => {
+            const byId = new Map(old.map((c) => [c.id, c]));
+            for (const c of j.cues!) byId.set(c.id, c);
+            const next = [...byId.values()].sort(
+              (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id),
+            );
+            return next.length === old.length && next.every((c, i) => c.url === old[i]?.url)
+              ? old
+              : next;
+          });
+        }
+        if (j.cues?.some((cue) => cue.lang === wantedSub) && !j.pending) clearInterval(timer);
       } catch {
         /* the normal external-subtitle result remains usable */
       } finally {
@@ -918,11 +979,12 @@ export default function Player({
       }
     };
     const timer = setInterval(find, 5_000);
+    void find();
     return () => {
       live = false;
       clearInterval(timer);
     };
-  }, [subLoading, wantedSub, progress.chapterId, progress.via, progress.mediaId]);
+  }, [subLoading, wantedSub, progress.chapterId, progress.via, progress.mediaId, pick?.url]);
 
   const [timed, setTimed] = useState<TimedCue[]>([]);
   const [subAt, setSubAt] = useState(initialTime);
@@ -977,10 +1039,12 @@ export default function Player({
     position,
     duration: clockDuration,
     ended,
+    outro: skipSegments.find((segment) => segment.type === "ed" || segment.type === "mixed-ed") ?? null,
     watchedSeconds: playedFor.current,
     cancelled: nextCancelled,
     hasNext: Boolean(nextHref),
   });
+  const activeSkip = skipSegments.find((segment) => position >= segment.start && position < segment.end);
 
   const finding = err
     ? null
@@ -1080,7 +1144,7 @@ export default function Player({
       }}
     >
       <MediaProvider />
-      <Gesture className="player-gesture" event="pointerup" action="toggle:controls" />
+      <PlayerGestures />
       {activeCue && <SubOverlay cues={timed} at={subAt} scale={captionScale} />}
 
       {err ? (
@@ -1127,7 +1191,7 @@ export default function Player({
       {countdown != null && nextHref && (
         <div className="player-nextup">
           <div className="player-nextup-card">
-            <span className="mono">Up next · {countdown}</span>
+            <span className="mono">Up next{countdown > 0 ? ` · ${countdown}` : ""}</span>
             <b>{nextLabel ?? "Next episode"}</b>
             <div className="acts">
               <a className="btn primary" href={nextHref}>
@@ -1138,6 +1202,14 @@ export default function Player({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {activeSkip && (
+        <div className="player-skip">
+          <button type="button" className="btn primary" onClick={() => seekTo(activeSkip.end)}>
+            Skip {skipLabel(activeSkip.type)}
+          </button>
         </div>
       )}
 
@@ -1160,6 +1232,7 @@ export default function Player({
               position={position}
               duration={clockDuration}
               buffered={bufferedPct}
+              segments={skipSegments}
               onSeek={seekTo}
             />
           </div>
@@ -1253,6 +1326,29 @@ export default function Player({
 function PlayPause() {
   const paused = useMediaState("paused");
   return <Icon d={paused ? PATH.play : PATH.pause} />;
+}
+
+/* Desktop click pauses like YouTube. Touch still taps to reveal the dock —
+   mouse move is how chrome comes back on a fine pointer. */
+function PlayerGestures() {
+  const pointer = useMediaState("pointer");
+  const touch = pointer === "coarse";
+  return (
+    <>
+      <Gesture
+        className="player-gesture"
+        event="pointerup"
+        action="toggle:paused"
+        disabled={touch}
+      />
+      <Gesture
+        className="player-gesture"
+        event="pointerup"
+        action="toggle:controls"
+        disabled={!touch}
+      />
+    </>
+  );
 }
 
 function DockMenu({

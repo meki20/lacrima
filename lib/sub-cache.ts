@@ -2,13 +2,30 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cueType, fileHref, type SubCue } from "./subs.ts";
-import { ensureMediaDir, mediaDir, type CacheCtx } from "./play-cache.ts";
+import {
+  chapterSlug,
+  ensureMediaDir,
+  mediaDir,
+  persistMedia,
+  type CacheCtx,
+} from "./play-cache.ts";
+import { listStoredPlugins } from "./sources/store.ts";
 
-const MAX_BYTES = 2_000_000;
+const MAX_BYTES = 8_000_000;
+const BROWSER_UA =
+  "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36";
+
+export type SubRead = { buf: Uint8Array; error?: undefined } | { buf: null; error: string };
 
 function subsDir(ctx: CacheCtx): string {
+  /* Video persist is off in Docker; /app/data is root-owned, so mkdir EACCES.
+     Torrents already land in tmp for the same reason. */
+  if (!persistMedia()) {
+    return join(tmpdir(), "lacrima-subs", `${ctx.via}-${ctx.mediaId}`, chapterSlug(ctx.chapterId));
+  }
   return join(mediaDir(ctx), "subs");
 }
 
@@ -85,59 +102,129 @@ function blocked(ip: string) {
   return v6.startsWith("fc") || v6.startsWith("fd") || v6.startsWith("fe80");
 }
 
-async function assertPublic(target: URL) {
-  if (target.protocol !== "http:" && target.protocol !== "https:") throw new Error("Unsupported scheme");
-  const host = target.hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) {
-    throw new Error("Host not allowed");
+function addonHosts(): Set<string> {
+  const hosts = new Set<string>();
+  try {
+    for (const kind of ["anime", "manga", "novel"] as const) {
+      for (const p of listStoredPlugins(kind)) {
+        if (!p.plugin_url) continue;
+        try {
+          hosts.add(new URL(p.plugin_url).hostname.toLowerCase());
+        } catch {
+          /* ignore malformed plugin urls */
+        }
+      }
+    }
+  } catch {
+    /* db may be closed in unit tests */
   }
-  if (isIP(host) && blocked(host)) throw new Error("Host not allowed");
-  const { address } = await lookup(host);
-  if (blocked(address)) throw new Error("Host not allowed");
+  return hosts;
 }
 
-const pulling = new Map<string, Promise<Uint8Array | null>>();
+async function assertReachable(target: URL) {
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
+    throw new Error("That subtitle URL is not http(s).");
+  }
+  const host = target.hostname.toLowerCase();
+  if (addonHosts().has(host)) return;
+  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) {
+    throw new Error("That subtitle URL is on a private host.");
+  }
+  if (isIP(host) && blocked(host)) throw new Error("That subtitle URL is on a private host.");
+  const { address } = await lookup(host);
+  if (blocked(address)) throw new Error("That subtitle URL is on a private host.");
+}
 
-async function pull(ctx: CacheCtx, url: string): Promise<Uint8Array | null> {
+function readFromDisk(dest: string): Uint8Array | null {
+  try {
+    if (!existsSync(dest)) return null;
+    const buf = readFileSync(dest);
+    return buf.byteLength ? buf : null;
+  } catch {
+    return null;
+  }
+}
+
+const pulling = new Map<string, Promise<SubRead>>();
+
+async function pull(ctx: CacheCtx, url: string): Promise<SubRead> {
   const dest = subBodyPath(ctx, url);
-  if (existsSync(dest)) return readFileSync(dest);
+  const cached = readFromDisk(dest);
+  if (cached) return { buf: cached };
+
+  if (url.startsWith("embedded:")) {
+    try {
+      const { embeddedSubtitles } = await import("./embedded-subs.ts");
+      await embeddedSubtitles(ctx);
+    } catch (e) {
+      return {
+        buf: null,
+        error: e instanceof Error ? e.message : "Could not extract embedded subtitles.",
+      };
+    }
+    const extracted = readFromDisk(dest);
+    if (extracted) return { buf: extracted };
+    return { buf: null, error: "Could not extract that subtitle track from the video file." };
+  }
+
   let target: URL;
   try {
     target = new URL(url);
   } catch {
-    return null;
+    return { buf: null, error: "That subtitle URL is not valid." };
   }
   try {
-    await assertPublic(target);
-  } catch {
-    return null;
+    await assertReachable(target);
+  } catch (e) {
+    return { buf: null, error: e instanceof Error ? e.message : "That subtitle URL is not allowed." };
   }
   try {
     const upstream = await fetch(target, {
-      headers: { accept: "text/*,*/*" },
+      headers: {
+        accept: "text/plain,text/vtt,application/x-subrip,text/*,*/*",
+        "accept-language": "en",
+        "user-agent": BROWSER_UA,
+      },
       cache: "no-store",
-      signal: AbortSignal.timeout(12_000),
+      redirect: "follow",
+      signal: AbortSignal.timeout(30_000),
     });
-    if (!upstream.ok || !upstream.body) return null;
+    if (!upstream.ok) {
+      return { buf: null, error: `The subtitle host returned ${upstream.status}.` };
+    }
     const buf = new Uint8Array(await upstream.arrayBuffer());
-    if (!buf.byteLength || buf.byteLength > MAX_BYTES) return null;
-    mkdirSync(subsDir(ctx), { recursive: true });
-    if (!existsSync(dest)) writeFileSync(dest, buf);
-    return buf;
-  } catch {
-    return null;
+    if (!buf.byteLength) return { buf: null, error: "The subtitle host returned an empty file." };
+    if (buf.byteLength > MAX_BYTES) return { buf: null, error: "That subtitle file is larger than 8 MB." };
+    try {
+      mkdirSync(subsDir(ctx), { recursive: true });
+      if (!existsSync(dest)) writeFileSync(dest, buf);
+    } catch {
+      /* a cache write must never fail a play */
+    }
+    return { buf };
+  } catch (e) {
+    const name = e instanceof Error ? e.name : "";
+    if (name === "TimeoutError" || name === "AbortError") {
+      return { buf: null, error: "Timed out fetching the subtitle file." };
+    }
+    return { buf: null, error: e instanceof Error ? e.message : "Couldn't fetch that subtitle file." };
   }
 }
 
 /** Disk first. Fetch and save once if missing. */
-export function loadSubBody(ctx: CacheCtx, url: string): Promise<Uint8Array | null> {
+export function readSubBody(ctx: CacheCtx, url: string): Promise<SubRead> {
   const dest = subBodyPath(ctx, url);
-  if (existsSync(dest)) return Promise.resolve(readFileSync(dest));
+  const cached = readFromDisk(dest);
+  if (cached) return Promise.resolve({ buf: cached });
   const hit = pulling.get(dest);
   if (hit) return hit;
   const run = pull(ctx, url).finally(() => pulling.delete(dest));
   pulling.set(dest, run);
   return run;
+}
+
+export async function loadSubBody(ctx: CacheCtx, url: string): Promise<Uint8Array | null> {
+  return (await readSubBody(ctx, url)).buf;
 }
 
 /** Warm every file as soon as the addon list lands. Missing files stay missing. */
@@ -150,4 +237,14 @@ export function mimeForSub(url: string): string {
   if (t === "srt") return "text/plain; charset=utf-8";
   if (t === "ass" || t === "ssa") return "text/plain; charset=utf-8";
   return "text/vtt; charset=utf-8";
+}
+
+export function decodeSubBytes(buf: Uint8Array): string {
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return new TextDecoder("utf-16le").decode(buf);
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    return new TextDecoder("utf-16be").decode(buf);
+  }
+  return new TextDecoder("utf-8").decode(buf);
 }

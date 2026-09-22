@@ -1,8 +1,9 @@
 import { subtitleLangs, type Lang } from "../audio.ts";
 import { animeIds, nativeIds, type AnimeIds } from "../anime-ids.ts";
+import { episodeNames } from "../episode-metadata.ts";
 import { dedupeCues, toCue, type SubCue } from "../subs.ts";
 import { ensureSubFiles, loadSubIndex, saveSubIndex } from "../sub-cache.ts";
-import { embeddedSubtitles } from "../embedded-subs.ts";
+import { embeddedSubtitles, embeddedSubtitlesDetailed, type EmbeddedHint } from "../embedded-subs.ts";
 import type { CacheCtx } from "../play-cache-client.ts";
 import {
   browserPlayable,
@@ -314,8 +315,8 @@ export function isBareMovieId(id: string): boolean {
 export function wantedSlot(id: string): Slot | undefined {
   const imdb = IMDB_EP.exec(id);
   if (imdb) return { season: Math.max(Number(imdb[2]), 1), episode: Number(imdb[3]) };
-  const kitsu = /^kitsu:\d+:(\d+)$/.exec(id);
-  if (kitsu) return { season: 1, episode: Number(kitsu[1]) };
+  const anime = /^(?:kitsu|anilist|mal):\d+(?::|-)(\d+)$/.exec(id);
+  if (anime) return { season: 1, episode: Number(anime[1]) };
   return undefined;
 }
 
@@ -345,7 +346,8 @@ export function extraStreamIds(
      episode at all — `kitsu:176:tt0748454` is not a question anyone can answer. */
   const season = imdb ? Number(imdb[2]) : null;
   if (season != null && season > 1) return catalog;
-  const episode = imdb ? imdb[3] : id.split(":").at(-1);
+  const animeEpisode = /^(?:kitsu|anilist|mal):\d+(?::|-)(\d+)$/.exec(id);
+  const episode = imdb ? imdb[3] : animeEpisode?.[1] ?? id.split(":").at(-1);
   if (!episode || !/^\d+$/.test(episode)) return catalog;
 
   const ids = { ...nativeIds(extras?.via, extras?.mediaId), ...extras?.ids };
@@ -357,9 +359,10 @@ export function extraStreamIds(
 
 function videoSlot(v: Video, i: number) {
   const m = /:(\d+):(\d+)$/.exec(v.id);
+  const slot = wantedSlot(v.id);
   return {
-    season: v.season ?? (m ? Number(m[1]) : 1),
-    episode: v.episode ?? (m ? Number(m[2]) : i + 1),
+    season: v.season ?? slot?.season ?? (m ? Number(m[1]) : 1),
+    episode: v.episode ?? slot?.episode ?? (m ? Number(m[2]) : i + 1),
   };
 }
 
@@ -1140,8 +1143,11 @@ async function resolveSubtitlesUncached(
   }
 }
 
-export function resolveEmbeddedSubtitles(ctx: CacheCtx): Promise<SubCue[]> {
-  return embeddedSubtitles(ctx);
+export function resolveEmbeddedSubtitles(
+  ctx: CacheCtx,
+  hint?: EmbeddedHint,
+): Promise<{ cues: SubCue[]; pending: boolean }> {
+  return embeddedSubtitlesDetailed(ctx, hint);
 }
 
 export const stremio: SourceBackend = {
@@ -1253,8 +1259,17 @@ export const stremio: SourceBackend = {
         overview: v.overview ?? null,
       };
     });
-    rememberChapters(cacheKey, chapters);
-    return Ok(chapters);
+    const names = chapters.some((chapter) => chapter.name === "Untitled" || /^Episode \d+$/i.test(chapter.name))
+      ? await episodeNames(id)
+      : new Map<number, string>();
+    const named = chapters.map((chapter) => {
+      const name = names.get(chapter.number);
+      return name && (chapter.name === "Untitled" || /^Episode \d+$/i.test(chapter.name))
+        ? { ...chapter, name }
+        : chapter;
+    });
+    rememberChapters(cacheKey, named);
+    return Ok(named);
   },
 
   async pages(chapterId, extras) {
