@@ -3,7 +3,7 @@ set -eu
 
 DB="${LACRIMA_DB:-/data/lacrima.db}"
 REPO="https://github.com/meki20/lacrima.git"
-API="https://api.github.com/repos/meki20/lacrima/releases/latest"
+API="https://api.github.com/repos/meki20/lacrima/releases?per_page=1"
 
 sql() { sqlite3 "$DB" "$1"; }
 now() { date +%s000; }
@@ -13,22 +13,18 @@ release() {
   code="$(printf '%s' "$reply" | tail -n 1)"
   body="$(printf '%s' "$reply" | sed '$d')"
   checked="$(now)"
-  if [ "$code" = 404 ]; then
-    sql "update app_updates set last_checked_at=$checked, latest_tag=null, latest_name=null, latest_url=null, latest_published_at=null, last_status='No releases have been published yet.' where singleton=1;"
-    return 1
-  fi
   if [ "$code" != 200 ]; then
     sql "update app_updates set last_checked_at=$checked, last_status='Could not check GitHub. Try again shortly.' where singleton=1;"
     return 1
   fi
-  tag="$(printf '%s' "$body" | jq -r '.tag_name // empty')"
+  tag="$(printf '%s' "$body" | jq -r '.[0].tag_name // empty')"
   if [ -z "$tag" ]; then
-    sql "update app_updates set last_checked_at=$checked, last_status='GitHub returned an invalid release.' where singleton=1;"
+    sql "update app_updates set last_checked_at=$checked, latest_tag=null, latest_name=null, latest_url=null, latest_published_at=null, last_status='No releases have been published yet.' where singleton=1;"
     return 1
   fi
-  name="$(printf '%s' "$body" | jq -r '.name // .tag_name')"
-  url="$(printf '%s' "$body" | jq -r '.html_url // empty')"
-  published="$(printf '%s' "$body" | jq -r '.published_at // empty')"
+  name="$(printf '%s' "$body" | jq -r '.[0].name // .[0].tag_name')"
+  url="$(printf '%s' "$body" | jq -r '.[0].html_url // empty')"
+  published="$(printf '%s' "$body" | jq -r '.[0].published_at // empty')"
   published_at="$(date -d "$published" +%s 2>/dev/null || true)"
   [ -n "$published_at" ] && published_at="${published_at}000" || published_at=null
   sql "update app_updates set last_checked_at=$checked, latest_tag=$(quote "$tag"), latest_name=$(quote "$name"), latest_url=$(quote "$url"), latest_published_at=$published_at, last_status=$(quote "Latest release: $tag.") where singleton=1;"

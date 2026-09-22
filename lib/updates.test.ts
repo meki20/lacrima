@@ -11,6 +11,8 @@ test("GitHub release data is reduced to a safe public status", () => {
   assert.deepEqual(releaseFromGithub({ tag_name: "v1.0.0", name: "First release", html_url: "https://github.com/meki20/lacrima/releases/tag/v1.0.0", published_at: "2026-09-22T10:00:00Z" }), {
     tag: "v1.0.0", name: "First release", url: "https://github.com/meki20/lacrima/releases/tag/v1.0.0", published_at: Date.parse("2026-09-22T10:00:00Z"),
   });
+  assert.equal(releaseFromGithub([]), null);
+  assert.equal(releaseFromGithub([{ tag_name: "a1.0.0", html_url: "https://github.com/meki20/lacrima/releases/tag/a1.0.0" }])?.tag, "a1.0.0");
   assert.equal(releaseFromGithub({ tag_name: "v1", html_url: "https://not-github.example/release" }), null);
 });
 

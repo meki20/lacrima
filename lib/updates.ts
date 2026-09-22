@@ -2,7 +2,7 @@ import { db, plain } from "./db.ts";
 import packageJson from "../package.json" with { type: "json" };
 
 const REPOSITORY = "https://github.com/meki20/lacrima";
-const RELEASES = "https://api.github.com/repos/meki20/lacrima/releases/latest";
+const RELEASES = "https://api.github.com/repos/meki20/lacrima/releases?per_page=1";
 const HEARTBEAT_MS = 90_000;
 
 export type UpdatePreferences = { auto_update: boolean; update_time: string };
@@ -76,15 +76,14 @@ export async function checkForRelease(): Promise<UpdateStatus> {
       headers: { Accept: "application/vnd.github+json", "User-Agent": "Lacrima-updater" },
       cache: "no-store",
     });
-    if (response.status === 404) {
+    if (!response.ok) throw new Error("GitHub could not be reached.");
+
+    const release = releaseFromGithub(await response.json());
+    if (!release) {
       db().prepare("update app_updates set last_checked_at = ?, latest_tag = null, latest_name = null, latest_url = null, latest_published_at = null, last_status = ? where singleton = 1")
         .run(checked, "No releases have been published yet.");
       return updateStatus();
     }
-    if (!response.ok) throw new Error("GitHub could not be reached.");
-
-    const release = releaseFromGithub(await response.json());
-    if (!release) throw new Error("GitHub returned an invalid release.");
     db().prepare("update app_updates set last_checked_at = ?, latest_tag = ?, latest_name = ?, latest_url = ?, latest_published_at = ?, last_status = ? where singleton = 1")
       .run(checked, release.tag, release.name, release.url, release.published_at, `Latest release: ${release.tag}.`);
   } catch (error) {
@@ -102,6 +101,7 @@ export function cleanPreferences(values: Partial<UpdatePreferences>): UpdatePref
 }
 
 export function releaseFromGithub(value: unknown): Release | null {
+  if (Array.isArray(value)) return releaseFromGithub(value[0]);
   if (!value || typeof value !== "object") return null;
   const release = value as Record<string, unknown>;
   if (typeof release.tag_name !== "string" || typeof release.html_url !== "string") return null;
