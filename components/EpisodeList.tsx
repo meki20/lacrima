@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import MarkMenu from "./MarkMenu";
 import { isChapterRead, pushProgress, type ProgressWrite } from "@/lib/progress-write";
@@ -35,6 +35,7 @@ export default function EpisodeList({
   progress,
   base,
   indexOffset = 0,
+  completed = false,
 }: {
   episodes: EpisodeRow[];
   readingId: string | null;
@@ -44,8 +45,10 @@ export default function EpisodeList({
   base: string;
   /** When this list is a season window, the index of episodes[0] in the source list. */
   indexOffset?: number;
+  completed?: boolean;
 }) {
   const router = useRouter();
+  const list = useRef<HTMLDivElement>(null);
   const seasons = useMemo(() => {
     const set = new Set(episodes.map((e) => e.season ?? 1));
     return [...set].sort((a, b) => rank(a) - rank(b));
@@ -63,13 +66,30 @@ export default function EpisodeList({
   const currentLocal = episodes.findIndex((e) => e.id === readingId);
   const current = currentLocal >= 0 ? indexOffset + currentLocal : -1;
 
+  useEffect(() => {
+    const el = list.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.deltaY === 0) return;
+      const max = el.scrollHeight - el.clientHeight;
+      if (max <= 0) return;
+      const up = e.deltaY < 0;
+      if ((up && el.scrollTop <= 0) || (!up && el.scrollTop >= max - 0.5)) {
+        e.preventDefault();
+        window.scrollBy(0, e.deltaY);
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
   const play = (c: EpisodeRow, extra: { skipAhead?: boolean; exact?: boolean } = { skipAhead: true }) => {
     const i = episodes.findIndex((e) => e.id === c.id);
     return pushProgress({
       ...progress,
       unit: indexOffset + i + 1,
-      chapterId: c.id,
-      chapterName: c.name,
+      chapterId: extra.exact ? "-" : c.id,
+      chapterName: extra.exact ? "" : c.name,
       season: c.season,
       episode: c.number,
       ...extra,
@@ -92,12 +112,12 @@ export default function EpisodeList({
           ))}
         </div>
       )}
-      <div className="rows eps scrollbox">
+      <div className="rows eps scrollbox" ref={list}>
         {shown.map((c) => {
           const i = episodes.findIndex((e) => e.id === c.id);
-          const here = c.id === readingId;
+          const read = completed || isChapterRead(indexOffset + i, current, unit);
+          const here = c.id === readingId && !read;
           const selected = c.id === selectedId;
-          const read = isChapterRead(indexOffset + i, current, unit);
           const tag = seasonTag(c.season);
           return (
             <div
@@ -135,7 +155,14 @@ export default function EpisodeList({
                 tabIndex={selected ? undefined : -1}
                 onClick={(e) => {
                   e.preventDefault();
-                  void play(c).then(() => router.push(`${base}${encodeURIComponent(c.id)}`));
+                  const href = `${base}${encodeURIComponent(c.id)}`;
+                  /* Same episode: keep the saved seconds; a skipAhead rewrite
+                     would resume at 0. */
+                  if (here || read) {
+                    router.push(href);
+                    return;
+                  }
+                  void play(c).then(() => router.push(href));
                 }}
               >
                 Play episode
@@ -153,8 +180,8 @@ export default function EpisodeList({
                   void pushProgress({
                     ...progress,
                     unit: indexOffset,
-                    chapterId: c.id,
-                    chapterName: c.name,
+                    chapterId: "-",
+                    chapterName: "",
                     season: c.season,
                     episode: c.number,
                     exact: true,

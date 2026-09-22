@@ -1,16 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { type DockEpisode } from "@/lib/nav";
 import { isChapterRead, pushProgress, type ProgressWrite } from "@/lib/progress-write";
+import {
+  groupIndexForPage,
+  pageStepGroups,
+  probeImageHeights,
+  stitchPageGroups,
+} from "@/lib/reader-pages";
 import MarkMenu from "./MarkMenu";
-import { DEFAULT_READER, parseReaderPrefs, tapZone, type ReaderPrefs } from "@/lib/reader-prefs";
+import { DEFAULT_READER, parseReaderPrefs, tapZone, wheelZoom, type ReaderPrefs } from "@/lib/reader-prefs";
 import { useRouter } from "next/navigation";
 
 type Prefs = ReaderPrefs;
 
 const GLOBAL = "lacrima.reader";
 const PRELOAD = 2;
+
+function atEnd(href: string | null): string | null {
+  if (!href) return null;
+  return `${href}${href.includes("?") ? "&" : "?"}end=1`;
+}
 
 export type ReaderProps = {
   pages: string[];
@@ -21,6 +32,7 @@ export type ReaderProps = {
   prevHref: string | null;
   nextHref: string | null;
   progress: ProgressWrite;
+  trackProgress?: boolean;
   /** via:id — prefs stick to the series, not the chapter. */
   settingsKey: string;
   defaults?: Prefs;
@@ -37,6 +49,7 @@ export default function Reader({
   prevHref,
   nextHref,
   progress,
+  trackProgress = true,
   settingsKey,
   defaults = DEFAULT_READER,
   chapters = [],
@@ -50,6 +63,8 @@ export default function Reader({
   const [chrome, setChrome] = useState(true);
   const [menu, setMenu] = useState(false);
   const [drag, setDrag] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const reader = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
   const chaptersEl = useRef<HTMLDivElement>(null);
   const tap0 = useRef<{ id: number; x: number; y: number } | null>(null);
@@ -58,9 +73,48 @@ export default function Reader({
   const paged = mode === "paged";
   const double = paged && spread === "double";
   const stride = double ? 2 : 1;
-  const shown = double ? [page, page + 1].filter((i) => i < pages.length) : [page];
+  const [heights, setHeights] = useState<number[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setHeights(null);
+    void probeImageHeights(pages).then((next) => {
+      if (!cancelled) setHeights(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pages]);
+  const stacksReady = heights != null || !paged;
+  const stacks = useMemo(() => {
+    if (heights && heights.length === pages.length && heights.some((h) => h > 0)) {
+      return stitchPageGroups(heights);
+    }
+    return pages.map((_, i) => [i]);
+  }, [heights, pages]);
+  const stackAt = groupIndexForPage(stacks, page);
+  const shownStacks = (
+    double ? [stacks[stackAt], stacks[stackAt + 1]] : [stacks[stackAt]]
+  ).filter((s): s is number[] => Array.isArray(s) && s.length > 0);
+  const pageCount = paged ? stacks.length : pages.length;
+  const pageLabel = paged ? stackAt : page;
   const currentChapter = chapters.findIndex((c) => c.id === currentId);
   const [readUnit, setReadUnit] = useState(progress.unit);
+  useEffect(() => {
+    setPage(clamp(initialPage, pages.length));
+    setZoom(1);
+  }, [currentId, initialPage, pages.length]);
+
+  useEffect(() => {
+    const root = reader.current;
+    if (!root) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey || !(e.target instanceof Element) || !e.target.closest(".reader-stage, .reader-webtoon")) return;
+      e.preventDefault();
+      setZoom((current) => wheelZoom(current, e.deltaY));
+    };
+    root.addEventListener("wheel", onWheel, { passive: false });
+    return () => root.removeEventListener("wheel", onWheel);
+  }, []);
   useEffect(() => {
     setReadUnit(progress.unit);
   }, [progress.unit, progress.chapterId]);
@@ -77,10 +131,15 @@ export default function Reader({
 
   useEffect(() => {
     if (!double) return;
-    setPage((p) => p - (p % 2));
-  }, [double]);
+    setPage((p) => {
+      const gi = groupIndexForPage(stacks, p);
+      const snapped = gi - (gi % 2);
+      return stacks[snapped]?.[0] ?? p;
+    });
+  }, [double, stacks]);
 
   useEffect(() => {
+    if (!trackProgress) return;
     const t = setTimeout(() => {
       pushProgress({
         ...progress,
@@ -94,13 +153,14 @@ export default function Reader({
       });
     }, 700);
     return () => clearTimeout(t);
-  }, [page, progress]);
+  }, [page, progress, trackProgress]);
 
   const progressRef = useRef(progress);
   progressRef.current = progress;
   const pageRef = useRef(page);
   pageRef.current = page;
   useEffect(() => {
+    if (!trackProgress) return;
     let last = Date.now();
     const id = setInterval(() => {
       if (document.visibilityState !== "visible") {
@@ -125,30 +185,64 @@ export default function Reader({
       });
     }, 5_000);
     return () => clearInterval(id);
-  }, []);
+  }, [trackProgress]);
 
   const goPage = useCallback(
     (next: number) => {
+      if (paged) {
+        if (next < 0) {
+          const href = atEnd(prevHref);
+          if (href) router.push(href);
+          return;
+        }
+        if (next >= stacks.length) {
+          if (nextHref) router.push(nextHref);
+          return;
+        }
+        const at = double ? next - (next % 2) : next;
+        setPage(stacks[at]?.[0] ?? 0);
+        return;
+      }
       if (next < 0) {
-        if (prevHref) router.push(prevHref);
+        const href = atEnd(prevHref);
+        if (href) router.push(href);
         return;
       }
       if (next >= pages.length) {
         if (nextHref) router.push(nextHref);
         return;
       }
-      const at = double ? next - (next % 2) : next;
-      setPage(at);
+      setPage(next);
       if (mode === "webtoon") {
         suppressObserver.current = true;
-        strip.current?.children[at]?.scrollIntoView({ block: "start" });
+        strip.current?.children[next]?.scrollIntoView({ block: "start" });
         setTimeout(() => (suppressObserver.current = false), 120);
       }
     },
-    [double, mode, nextHref, pages.length, prevHref, router],
+    [double, mode, nextHref, pages.length, paged, prevHref, router, stacks],
   );
 
-  const step = useCallback((d: number) => goPage(page + d * stride), [goPage, page, stride]);
+  const step = useCallback(
+    (d: number) => {
+      if (paged) {
+        const gi = groupIndexForPage(stacks, page);
+        const nextGi = gi + d * stride;
+        if (nextGi < 0) {
+          const href = atEnd(prevHref);
+          if (href) router.push(href);
+          return;
+        }
+        if (nextGi >= stacks.length) {
+          if (nextHref) router.push(nextHref);
+          return;
+        }
+        setPage(pageStepGroups(page, d, stacks, spread));
+        return;
+      }
+      goPage(page + d * stride);
+    },
+    [goPage, nextHref, page, paged, prevHref, router, stacks, stride, spread],
+  );
 
   useEffect(() => {
     if (mode !== "webtoon" || !strip.current) return;
@@ -174,9 +268,9 @@ export default function Reader({
     strip.current?.children[page]?.scrollIntoView({ block: "start" });
     const t = setTimeout(() => (suppressObserver.current = false), 200);
     return () => clearTimeout(t);
-    // Only on a mode switch — following `page` here would fight the observer.
+    // Mode switch and first paint with pages — following `page` would fight the observer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
+  }, [mode, pages.length]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -221,11 +315,12 @@ export default function Reader({
   useEffect(() => {
     if (!menu) return;
     const box = chaptersEl.current;
-    const on = box?.querySelector<HTMLElement>("a.on");
-    if (!box || !on) return;
-    const top = on.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
-    box.scrollTop = top - (box.clientHeight - on.offsetHeight) / 2;
-  }, [menu, currentId]);
+    const read = box?.querySelectorAll<HTMLElement>(".reader-chapter.read");
+    const target = read?.[read.length - 1];
+    if (!box || !target) return;
+    const top = target.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+    box.scrollTop = top - target.offsetHeight;
+  }, [menu, currentId, readUnit]);
 
   const openMenu = useCallback(() => {
     setMenu(true);
@@ -254,14 +349,16 @@ export default function Reader({
     }
   };
 
-  const t = pages.length > 1 ? page / (pages.length - 1) : 1;
+  const t = pageCount > 1 ? pageLabel / (pageCount - 1) : 1;
   const visible = chrome || menu;
 
   return (
     <div
+      ref={reader}
       className={`reader${visible ? "" : " bare"}`}
       data-mode={mode}
       data-rtl={rtl ? "" : undefined}
+      style={{ ["--zoom" as string]: zoom }}
     >
       <header className="reader-bar">
         <a className="pbtn" href={backHref} aria-label="Back to the title" title="Back (Esc)">
@@ -272,7 +369,7 @@ export default function Reader({
           <span>
             {chapterLabel}
             <span className="mono" style={{ marginLeft: 8 }}>
-              {page + 1} / {pages.length}
+              {pageLabel + 1} / {pageCount}
             </span>
           </span>
         </div>
@@ -307,24 +404,41 @@ export default function Reader({
           data-fit={fit}
           data-spread={double ? "double" : "single"}
           data-rtl={rtl ? "" : undefined}
+          data-zoomed={zoom > 1 ? "" : undefined}
           onPointerDown={onTapDown}
           onPointerUp={onTapUp}
           onPointerCancel={() => {
             tap0.current = null;
           }}
         >
-          {shown.map((i) => (
-            <img
-              key={pages[i]}
-              className="reader-img"
-              src={pages[i]}
-              alt={`Page ${i + 1}`}
-              draggable={false}
-            />
-          ))}
-          {pages.slice(page + shown.length, page + shown.length + PRELOAD).map((src) => (
-            <img key={src} src={src} alt="" style={{ display: "none" }} />
-          ))}
+          {!stacksReady ? (
+            <div className="reader-loading" aria-busy="true">
+              Loading pages…
+            </div>
+          ) : (
+            <>
+              {shownStacks.map((stack) => (
+                <div
+                  key={stack[0]}
+                  className="reader-stack"
+                  data-stitched={stack.length > 1 ? "" : undefined}
+                >
+                  {stack.map((i) => (
+                    <img
+                      key={`${i}:${pages[i]}`}
+                      className="reader-img"
+                      src={pages[i]}
+                      alt={`Page ${i + 1}`}
+                      draggable={false}
+                    />
+                  ))}
+                </div>
+              ))}
+              {pages.slice(page + shownStacks.flat().length, page + shownStacks.flat().length + PRELOAD).map((src) => (
+                <img key={src} src={src} alt="" style={{ display: "none" }} />
+              ))}
+            </>
+          )}
         </div>
       ) : (
         <div
@@ -335,7 +449,7 @@ export default function Reader({
             tap0.current = null;
           }}
         >
-          <div className="reader-strip" ref={strip}>
+          <div className="reader-strip" ref={strip} data-zoomed={zoom > 1 ? "" : undefined}>
             {pages.map((src, i) => (
               <img
                 key={src}
@@ -352,8 +466,8 @@ export default function Reader({
         </div>
       )}
 
-      <Hop href={prevHref} side="prev" />
-      <Hop href={nextHref} side="next" />
+      <Hop href={rtl ? nextHref : atEnd(prevHref)} side="prev" chapter={rtl ? "next" : "prev"} />
+      <Hop href={rtl ? atEnd(prevHref) : nextHref} side="next" chapter={rtl ? "prev" : "next"} />
 
       {menu && (
         <button type="button" className="reader-catch" aria-label="Close options" onClick={() => setMenu(false)} />
@@ -413,12 +527,12 @@ export default function Reader({
               {chapters.map((c, i) => {
                 const read = isChapterRead(i, currentChapter, readUnit);
                 const write = (extra: { skipAhead?: boolean; exact?: boolean }, unit = i + 1) => {
-                  const target = unit > 0 ? chapters[unit - 1] ?? c : c;
+                  const target = extra.exact ? null : unit > 0 ? chapters[unit - 1] ?? c : c;
                   return pushProgress({
                     ...progress,
                     unit,
-                    chapterId: target.id,
-                    chapterName: target.name,
+                    chapterId: target?.id ?? "-",
+                    chapterName: target?.name ?? "",
                     ...extra,
                   }).then(() => {
                     setReadUnit((u) => (extra.exact ? unit : Math.max(u, unit)));
@@ -433,6 +547,10 @@ export default function Reader({
                       href={c.href}
                       onClick={(e) => {
                         e.preventDefault();
+                        if (c.id === currentId || read) {
+                          router.push(c.href);
+                          return;
+                        }
                         void write({ skipAhead: true }).then(() => router.push(c.href));
                       }}
                     >
@@ -459,9 +577,9 @@ export default function Reader({
         <input
           type="range"
           min={0}
-          max={Math.max(0, pages.length - 1)}
+          max={Math.max(0, pageCount - 1)}
           step={stride}
-          value={page}
+          value={pageLabel}
           dir={rtl ? "rtl" : "ltr"}
           aria-label="Page"
           onPointerDown={() => setDrag(true)}
@@ -473,14 +591,22 @@ export default function Reader({
   );
 }
 
-function Hop({ href, side }: { href: string | null; side: "prev" | "next" }) {
+function Hop({
+  href,
+  side,
+  chapter,
+}: {
+  href: string | null;
+  side: "prev" | "next";
+  chapter: "prev" | "next";
+}) {
   return (
     <a
       className={`pbtn reader-hop ${side}`}
       href={href ?? undefined}
       aria-disabled={!href}
-      aria-label={side === "prev" ? "Previous chapter" : "Next chapter"}
-      title={side === "prev" ? "Previous chapter" : "Next chapter"}
+      aria-label={chapter === "prev" ? "Previous chapter" : "Next chapter"}
+      title={chapter === "prev" ? "Previous chapter" : "Next chapter"}
     >
       <Icon d={side === "prev" ? PATH.prevCh : PATH.nextCh} />
     </a>

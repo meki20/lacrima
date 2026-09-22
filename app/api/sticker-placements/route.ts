@@ -20,7 +20,7 @@ export async function GET(req: Request) {
   const me = await currentProfile();
   return Response.json({
     ok: true,
-    placements: listPlacements(me.id, path, url.searchParams.get("surface")),
+    placements: listPlacements(me.id, path, url.searchParams.get("surface") ?? undefined),
   });
 }
 

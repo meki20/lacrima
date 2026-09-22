@@ -80,6 +80,18 @@ export default function LibraryMenu({
               Remove from library
             </button>
           )}
+          {current && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm("Remove this title from your history? This clears its progress and in-progress tracking.")) {
+                  save({ removeHistory: true });
+                }
+              }}
+            >
+              Remove from history
+            </button>
+          )}
         </div>
       )}
     </div>

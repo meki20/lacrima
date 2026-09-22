@@ -9,7 +9,7 @@ import {
   setPluginInstalled,
   upsertPlugin,
 } from "./store.ts";
-import { dropPlugin, loadPlugin } from "./plugin-host.ts";
+import { chapterHasText, collectNovelChapters, dropPlugin, loadPlugin } from "./plugin-host.ts";
 
 function split(id: string): [string, string] {
   const i = id.indexOf("::");
@@ -97,11 +97,12 @@ export const lnreader: SourceBackend = {
     const [sourceId, path] = split(mangaId);
     const p = getPlugin(sourceId, "novel");
     if (!p?.plugin_url) return Err("That novel plugin is not installed.");
+    if (!path) return Err("That novel binding has no source path.");
     try {
       const plugin = await loadPlugin(p.id, p.plugin_url);
-      const novel = await plugin.parseNovel(path);
+      const rows = await collectNovelChapters(plugin, path);
       return Ok(
-        (novel.chapters ?? []).map(
+        rows.map(
           (c, i): SourceChapter => ({
             id: `${sourceId}::${c.path}`,
             number: c.chapterNumber ?? i + 1,
@@ -121,10 +122,16 @@ export const lnreader: SourceBackend = {
     const [sourceId, path] = split(chapterId);
     const p = getPlugin(sourceId, "novel");
     if (!p?.plugin_url) return Err("That novel plugin is not installed.");
+    if (!path) return Err("That chapter has no source path.");
     try {
       const plugin = await loadPlugin(p.id, p.plugin_url);
       const html = await plugin.parseChapter(path);
-      return html ? Ok([html]) : Err("The plugin returned an empty chapter.");
+      if (!chapterHasText(html)) {
+        return Err(
+          "The plugin returned an empty chapter. The site may be blocking the request, or this chapter path is stale — try Refresh on the title page, or another source.",
+        );
+      }
+      return Ok([typeof html === "string" ? html : String(html)]);
     } catch (e) {
       return Err(e instanceof Error ? e.message : `Plugin ${p.name} failed to fetch the chapter.`);
     }

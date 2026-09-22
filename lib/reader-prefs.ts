@@ -12,7 +12,24 @@ export const DEFAULT_READER: ReaderPrefs = {
   spread: "single",
 };
 
+export type NovelReaderPrefs = {
+  mode: "paged" | "continuous";
+  rtl: boolean;
+  /** px, clamped 14–28 */
+  fontSize: number;
+};
+
+export const DEFAULT_NOVEL_READER: NovelReaderPrefs = {
+  mode: "continuous",
+  rtl: false,
+  fontSize: 18,
+};
+
 export type TapZone = "top" | "left" | "mid" | "right";
+
+export function wheelZoom(current: number, deltaY: number): number {
+  return Math.min(4, Math.max(1, current + (deltaY < 0 ? 0.25 : -0.25)));
+}
 
 /** Coordinates are relative to the stage, not the viewport. */
 export function tapZone(x: number, y: number, w: number, h: number): TapZone {
@@ -35,5 +52,23 @@ export function parseReaderPrefs(raw: string | null | undefined): ReaderPrefs {
     };
   } catch {
     return { ...DEFAULT_READER };
+  }
+}
+
+export function clampNovelFontSize(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_NOVEL_READER.fontSize;
+  return Math.min(28, Math.max(14, Math.round(n)));
+}
+
+export function parseNovelReaderPrefs(raw: string | null | undefined): NovelReaderPrefs {
+  try {
+    const s = JSON.parse(raw || "{}") as Partial<NovelReaderPrefs> & { mode?: string };
+    return {
+      mode: s.mode === "paged" ? "paged" : "continuous",
+      rtl: typeof s.rtl === "boolean" ? s.rtl : false,
+      fontSize: clampNovelFontSize(typeof s.fontSize === "number" ? s.fontSize : DEFAULT_NOVEL_READER.fontSize),
+    };
+  } catch {
+    return { ...DEFAULT_NOVEL_READER };
   }
 }

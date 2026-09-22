@@ -1,11 +1,13 @@
 import Link from "next/link";
+import NovelReader from "@/components/NovelReader";
 import Player from "@/components/Player";
 import Reader from "@/components/Reader";
-import TrackProgress from "@/components/TrackProgress";
+import { sanitizeNovelHtml } from "@/lib/api/sanitize";
 import { getBinding } from "@/lib/match";
 import type { MediaKind, ProviderSlug } from "@/lib/media";
 import { fetchTitle } from "@/lib/metadata";
 import { titleBackHref } from "@/lib/nav";
+import { paragraphIndex } from "@/lib/novel-html";
 import { currentProfile } from "@/lib/profile";
 import { profileSettings, readerSettings } from "@/lib/settings";
 import type { ProgressWrite } from "@/lib/progress-write";
@@ -15,6 +17,7 @@ import { chaptersFor } from "@/lib/resolve";
 import { backend } from "@/lib/sources";
 import { resolveStreams } from "@/lib/sources/stremio";
 import { fetchSeries, progressTree } from "@/lib/series";
+import { DEFAULT_NOVEL_READER } from "@/lib/reader-prefs";
 
 export const dynamic = "force-dynamic";
 
@@ -44,10 +47,13 @@ function Dead({ back, reason }: { back: string; reason: string }) {
 
 export default async function Read({
   params,
+  searchParams,
 }: {
   params: Promise<{ via: string; kind: string; id: string; chapterId: string }>;
+  searchParams: Promise<{ end?: string | string[] }>;
 }) {
   const p = await params;
+  const end = (await searchParams).end === "1";
   const via = p.via as ProviderSlug;
   const kind = p.kind as MediaKind;
   const mediaId = Number(p.id);
@@ -111,9 +117,23 @@ export default async function Read({
       ? `/read/${via}/${kind}/${mediaId}/${encodeURIComponent(chapters[i].id)}`
       : null;
 
-  const anchor = parseAnchor(getProgress(me.id, via, mediaId)?.anchor ?? null);
+  const savedProgress = getProgress(me.id, via, mediaId);
+  const anchor = parseAnchor(savedProgress?.anchor ?? null);
+  const trackProgress = !savedProgress ||
+    (anchor && "chapterId" in anchor && String(anchor.chapterId) === chapterId) ||
+    (at >= 0 && at + 1 > savedProgress.unit);
   const initialPage =
-    anchor?.kind === "page" && String(anchor.chapterId) === chapterId ? anchor.index : 0;
+    end && pages?.ok
+      ? pages.value.length - 1
+      : anchor?.kind === "page" && String(anchor.chapterId) === chapterId
+        ? anchor.index
+        : 0;
+  const initialParagraph =
+    end
+      ? Number.MAX_SAFE_INTEGER
+      : anchor?.kind === "paragraph" && String(anchor.chapterId ?? "") === chapterId
+        ? paragraphIndex(anchor.cfi)
+        : 0;
   const initialTime =
     anchor?.kind === "seconds" && String(anchor.chapterId) === chapterId ? anchor.at : 0;
 
@@ -182,21 +202,28 @@ export default async function Read({
   if (!pages?.ok) return <Dead back={back} reason="Nothing to show." />;
 
   if (kind === "novel") {
-    const html = pages.value[0].replace(/<script[\s\S]*?<\/script>/gi, "");
     return (
-      <div className="reader">
-        <TrackProgress progress={progress} />
-        <header className="reader-bar">
-          <Link className="rbtn" href={back}>
-            ←
-          </Link>
-          <div className="reader-id">
-            <b>{m.title}</b>
-            <span>{chapterLabel}</span>
-          </div>
-        </header>
-        <article className="novel" dangerouslySetInnerHTML={{ __html: html }} />
-      </div>
+      <NovelReader
+        html={sanitizeNovelHtml(pages.value[0])}
+        initialParagraph={initialParagraph}
+        title={m.title}
+        chapterLabel={chapterLabel}
+        backHref={back}
+        prevHref={at >= 0 ? hop(at - 1) : null}
+        nextHref={at >= 0 ? hop(at + 1) : null}
+        progress={progress}
+        trackProgress={trackProgress}
+        settingsKey={`${m.via}:${m.id}`}
+        defaults={DEFAULT_NOVEL_READER}
+        chapters={chapters.map((c) => ({
+          id: c.id,
+          number: c.number,
+          name: c.name,
+          season: c.season ?? null,
+          href: `/read/${via}/${kind}/${mediaId}/${encodeURIComponent(c.id)}`,
+        }))}
+        currentId={chapterId}
+      />
     );
   }
 
@@ -210,6 +237,7 @@ export default async function Read({
       prevHref={at >= 0 ? hop(at - 1) : null}
       nextHref={at >= 0 ? hop(at + 1) : null}
       progress={progress}
+      trackProgress={trackProgress}
       settingsKey={`${m.via}:${m.id}`}
       defaults={readerSettings(settings)}
       chapters={chapters.map((c) => ({

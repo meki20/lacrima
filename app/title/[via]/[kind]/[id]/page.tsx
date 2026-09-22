@@ -308,6 +308,7 @@ export default async function Title({
                   seasonHint={seasonHint}
                   episodeOffset={episodeOffset}
                   episodeCount={episodeCount}
+                  completed={libraryEntry?.status === "completed"}
                 />
               </Suspense>
             )}

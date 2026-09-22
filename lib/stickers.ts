@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { db, plain, plainAll } from "./db.ts";
 import type { MediaKind, ProviderSlug } from "./media.ts";
 import { ANIME_EPISODE_SECONDS } from "./progress-write.ts";
@@ -358,24 +358,35 @@ export async function collectionFor(
   profileId: number,
   items: { via: ProviderSlug; id: number; kind: MediaKind; title: string; href: string }[],
 ): Promise<TitleStickers[]> {
-  const unique: typeof items = [];
+  const unique: {
+    item: (typeof items)[number];
+    owner: Awaited<ReturnType<typeof seriesOwner>>;
+  }[] = [];
   const seen = new Set<string>();
-  for (const item of items) {
-    const owner = await seriesOwner(item.via, item.kind, item.id);
-    const k = `${item.via}:${item.kind}:${owner.ownerId}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    unique.push({
-      ...item,
-      id: owner.ownerId,
-      title: owner.title || item.title,
-      href: `/title/${item.via}/${item.kind}/${owner.ownerId}`,
-    });
+  for (let i = 0; i < items.length; i += 3) {
+    const owners = await Promise.all(items.slice(i, i + 3).map(async (item) => ({
+      item,
+      owner: await seriesOwner(item.via, item.kind, item.id),
+    })));
+    for (const { item, owner } of owners) {
+      const k = `${item.via}:${item.kind}:${owner.ownerId}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      unique.push({
+        owner,
+        item: {
+          ...item,
+          id: owner.ownerId,
+          title: owner.title || item.title,
+          href: `/title/${item.via}/${item.kind}/${owner.ownerId}`,
+        },
+      });
+    }
   }
   const out: TitleStickers[] = [];
   for (let i = 0; i < unique.length; i += 3) {
     const chunk = unique.slice(i, i + 3);
-    out.push(...(await Promise.all(chunk.map((item) => titleStickers(profileId, item)))));
+    out.push(...(await Promise.all(chunk.map(({ item, owner }) => titleStickers(profileId, item, owner)))));
   }
   return out;
 }
@@ -383,8 +394,8 @@ export async function collectionFor(
 async function titleStickers(
   profileId: number,
   item: { via: ProviderSlug; id: number; kind: MediaKind; title: string; href: string },
+  owner: Awaited<ReturnType<typeof seriesOwner>>,
 ): Promise<TitleStickers> {
-  const owner = await seriesOwner(item.via, item.kind, item.id);
   const bits = seriesProgress(profileId, item.via, owner.partIds);
   await awardForTitle(profileId, item.via, owner.ownerId, item.kind, bits);
   const defs = readPool(item.via, owner.ownerId).defs;
@@ -868,7 +879,8 @@ function publicHttps(raw: string | null | undefined): string | null {
 }
 
 function artRoot() {
-  return join(process.cwd(), "data", "cache", "stickers");
+  const dbFile = process.env.LACRIMA_DB ?? join(process.cwd(), "data", "lacrima.db");
+  return join(dirname(dbFile), "cache", "stickers");
 }
 
 export function artHash(url: string): string {
@@ -882,7 +894,9 @@ function rememberArt(url: string) {
 }
 
 export function artSrc(url: string | null): string | null {
-  return url ? `/api/sticker-art/${artHash(url)}` : null;
+  if (!url) return null;
+  rememberArt(url);
+  return `/api/sticker-art/${artHash(url)}`;
 }
 
 export function loadArtFile(hash: string): { body: Buffer; mime: string } | null {

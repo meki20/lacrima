@@ -20,6 +20,7 @@ export default async function TitleChapters({
   seasonHint,
   episodeOffset,
   episodeCount,
+  completed = false,
 }: {
   binding: Binding;
   kind: MediaKind;
@@ -33,6 +34,7 @@ export default async function TitleChapters({
   seasonHint?: number | null;
   episodeOffset?: number;
   episodeCount?: number | null;
+  completed?: boolean;
 }) {
   const chapters = await chaptersFor(binding);
 
@@ -87,6 +89,7 @@ export default async function TitleChapters({
           progress={progress}
           base={`/read/${via}/${kind}/${id}/`}
           indexOffset={kind === "anime" && hideSeasonChips ? episodeOffset ?? 0 : 0}
+          completed={completed}
         />
       ) : (
         <ChapterList
@@ -94,6 +97,7 @@ export default async function TitleChapters({
           readingId={readingId}
           unit={readUnit}
           progress={progress}
+          completed={completed}
         />
       )}
     </section>
