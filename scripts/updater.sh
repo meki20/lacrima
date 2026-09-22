@@ -58,7 +58,7 @@ apply() {
   fi
   updated="$(now)"
   sql "update app_updates set requested_at=null, last_status='Pulling and rebuilding Lacrima.' where singleton=1;"
-  if gitcmd pull --ff-only origin "$branch" && docker compose --project-directory /workspace --profile serve up -d --build lacrima; then
+  if gitcmd pull --ff-only origin "$branch" && docker compose --project-directory /workspace --project-name lacrima --profile serve up -d --build lacrima; then
     sql "update app_updates set last_updated_at=$updated, last_applied_tag=$(quote "$tag"), last_status='Lacrima was updated and restarted.' where singleton=1;"
   else
     sql "update app_updates set last_status='Update failed. Check the lacrima-updater container logs.' where singleton=1;"
