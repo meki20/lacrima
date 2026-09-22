@@ -41,8 +41,8 @@ export default async function Profiles({
         <h1>Who&apos;s reading?</h1>
         {err && <p className="yours-muted">{err}</p>}
         <div className="people">
-          {people.map((p) => (
-            <form action={pick} key={p.id}>
+          {people.map((p, index) => (
+            <form action={pick} key={p.id} style={{ animationDelay: `${index * 60}ms` }}>
               <input type="hidden" name="id" value={p.id} />
               <button className="person" type="submit">
                 <div className="pfp" style={{ background: p.avatar_color }}>

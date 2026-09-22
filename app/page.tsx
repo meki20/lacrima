@@ -1,9 +1,10 @@
 import TopBar from "@/components/TopBar";
 import Rail from "@/components/Rail";
+import ContinueRail from "@/components/ContinueRail";
 import { Degraded, Failed } from "@/components/ui";
 import { fetchHome } from "@/lib/metadata";
 import { currentProfile, topGenre } from "@/lib/profile";
-import { continueReading, heroAction, type ContinueItem } from "@/lib/progress";
+import { continueReading, heroAction } from "@/lib/progress";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,7 @@ export default async function Home() {
         <TopBar active="Home" />
         <main>
           <Failed reason={home.reason} lastSuccess={home.lastSuccess} />
-          <Continue items={resume} />
+          <ContinueRail items={resume} />
         </main>
       </>
     );
@@ -72,7 +73,7 @@ export default async function Home() {
         {degraded && <Degraded via={via} />}
         {/* Continue lives on Home only — Yours is permanent, Home is temporal.
             Rail renders nothing when empty, so a new profile sees no shell. */}
-        <Continue items={resume} />
+        {resume.length > 0 && <ContinueRail items={resume} />}
         <Rail title="Popular this week" items={popularAnime} action="See all" href="/anime" />
         <Rail title={`Because you like ${genre.toLowerCase()}`} items={forYou} action="Why this?" />
         <Rail title="Popular manga" items={popularManga} action="See all" href="/manga" />
@@ -83,33 +84,3 @@ export default async function Home() {
 }
 
 const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
-
-function Continue({ items }: { items: ContinueItem[] }) {
-  if (items.length === 0) return null;
-  return (
-    <section>
-      <div className="row-h">
-        <h2>Continue</h2>
-      </div>
-      <div className="cont">
-        {items.map((m) => (
-          <a className="cont-card" key={`${m.kind}-${m.id}`} href={m.href}>
-            <div className="cont-art" style={{ background: m.color ?? "var(--s2)" }}>
-              {m.cover ? <img src={m.cover} alt="" loading="lazy" decoding="async" /> : null}
-            </div>
-            <div className="cont-b">
-              <div className="cont-top">
-                <h3>{m.title}</h3>
-                <span className="mono">{m.pip}</span>
-              </div>
-              {m.detail ? <div className="cont-detail">{m.detail}</div> : <div className="cont-detail">&nbsp;</div>}
-              <div className="progress" aria-hidden="true">
-                <i style={{ width: `${Math.round((m.ratio ?? 0) * 100)}%` }} />
-              </div>
-            </div>
-          </a>
-        ))}
-      </div>
-    </section>
-  );
-}

@@ -84,6 +84,10 @@ body:has(.sidebar) { padding-left: var(--nav); }
   overflow-x: auto;
   scrollbar-width: none;
 }
+.cont-wrap { position: relative; }
+.cont-wrap:hover .arrow, .cont-wrap .arrow:focus-visible { opacity: 1; }
+.cont-wrap .cont.panning { cursor: grabbing; }
+.cont-wrap .cont.panning .cont-card { pointer-events: none; }
 .cont::-webkit-scrollbar { display: none; }
 .cont-card {
   border: 0;
@@ -306,7 +310,18 @@ input:focus-visible { outline: none; border-color: var(--highlight); }
 }
 .empty b { display: block; color: var(--tx); font-weight: 500; margin-bottom: 5px; }
 
-.filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.filters {
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  .filters {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .filters::-webkit-scrollbar { display: none; }
+}
 .chip {
   padding: 4px 11px; border: 1px solid var(--border); border-radius: 999px;
   font-size: 12px; color: var(--tx2);
@@ -329,6 +344,53 @@ button.chip { background: transparent; cursor: pointer; font: inherit; }
   color: var(--tx);
 }
 .novel img { max-width: 100%; }
+
+.novel-reader {
+  background: var(--canvas);
+}
+.novel-stage {
+  align-items: stretch;
+  justify-content: center;
+  overflow: auto;
+  background: var(--canvas);
+}
+.novel-page {
+  max-width: 42rem;
+  width: 100%;
+  margin: 0 auto;
+  padding: 72px var(--pad) 96px;
+  font-size: var(--novel-size, 18px);
+  line-height: 1.7;
+  color: var(--tx);
+}
+.novel-page p { margin: 0; }
+.novel-scroll {
+  background: var(--canvas);
+}
+.novel-strip {
+  overscroll-behavior: contain;
+}
+.novel-flow {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 72px var(--pad) 96px;
+  font-size: var(--novel-size, 18px);
+  line-height: 1.7;
+  color: var(--tx);
+}
+.novel-flow p {
+  margin: 0 0 1.1em;
+}
+.novel-flow p:last-child { margin-bottom: 0; }
+.novel-size-opts {
+  align-items: center;
+}
+.novel-size-label {
+  min-width: 2ch;
+  text-align: center;
+  color: var(--tx2);
+  font-size: 12px;
+}
 
 input.search {
   color: var(--tx);
@@ -394,10 +456,36 @@ input.search::placeholder { color: var(--tx3); }
 }
 .reader-stage[data-fit="width"] { overflow-y: auto; align-items: flex-start; }
 .reader-stage[data-spread="double"] { gap: 0; }
+.reader-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+}
+.reader-stack[data-stitched] {
+  height: 100%;
+  justify-content: safe center;
+}
+.reader-stage[data-fit="width"] .reader-stack[data-stitched] {
+  justify-content: flex-start;
+}
+.reader-stage[data-spread="double"] .reader-stack { flex: 1; max-width: 50%; }
 /* Fit to the stage, not the viewport: the progress slit owns the bottom pixels. */
 .reader-stage .reader-img {
   height: 100%; width: auto; max-width: 100%; max-height: 100%;
   object-fit: contain;
+}
+.reader-stack[data-stitched] .reader-img {
+  width: 100%; height: auto; max-height: none;
+}
+.reader-loading {
+  color: var(--text-2, #a39e98);
+  font-size: 14px;
+  letter-spacing: 0.02em;
 }
 .reader-stage[data-fit="height"] .reader-img { height: 100%; width: auto; max-width: 100%; }
 .reader-stage[data-fit="width"] .reader-img { width: 100%; height: auto; max-height: none; }
@@ -405,7 +493,22 @@ input.search::placeholder { color: var(--tx3); }
   width: auto; height: auto; max-width: 100%; max-height: 100%;
 }
 .reader-stage[data-spread="double"] .reader-img { max-width: 50%; }
+.reader-stage[data-spread="double"] .reader-stack .reader-img { max-width: 100%; }
 .reader-stage[data-rtl][data-spread="double"] { flex-direction: row-reverse; }
+.reader-stage[data-zoomed] {
+  align-items: flex-start; justify-content: flex-start;
+  overflow: auto;
+}
+.reader-stage[data-zoomed] .reader-stack {
+  flex: 0 0 calc(100% * var(--zoom));
+  width: calc(100% * var(--zoom));
+  height: calc(100% * var(--zoom));
+  max-width: none; max-height: none; overflow: visible;
+}
+.reader-stage[data-zoomed][data-spread="double"] .reader-stack {
+  flex-basis: calc(50% * var(--zoom));
+  width: calc(50% * var(--zoom));
+}
 
 .reader-strip { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 .reader-webtoon {
@@ -415,6 +518,11 @@ input.search::placeholder { color: var(--tx3); }
 }
 .reader-strip .reader-img {
   display: block; width: min(100%, 900px); margin: 0 auto; height: auto;
+}
+.reader-strip[data-zoomed] { overflow: auto; }
+.reader-strip[data-zoomed] .reader-img {
+  width: min(calc(100% * var(--zoom)), calc(900px * var(--zoom)));
+  max-width: none;
 }
 .reader-img { user-select: none; -webkit-user-drag: none; outline: none; }
 
@@ -482,7 +590,7 @@ input.search::placeholder { color: var(--tx3); }
   bottom: calc(4px + env(safe-area-inset-bottom));
   display: flex; flex-direction: column; gap: 18px;
   padding: 56px 16px 20px;
-  overflow-y: auto;
+  overflow: hidden;
   background: color-mix(in srgb, var(--canvas) 94%, transparent);
   border-left: 1px solid var(--border);
   transform: translateX(100%);
@@ -516,10 +624,11 @@ input.search::placeholder { color: var(--tx3); }
 .reader-opt:focus-visible { outline: 2px solid var(--highlight); outline-offset: 2px; }
 .reader-chapters-box { flex: 1 1 auto; min-height: 0; }
 .reader-chapters {
-  max-height: min(50vh, 420px); overflow-y: auto;
+  flex: 1; min-height: 0; overflow-y: auto;
   display: flex; flex-direction: column; gap: 1px;
   padding-bottom: 12px;
 }
+.reader-chapters::after { content: ""; flex: 0 0 calc(100% - 48px); }
 .reader-chapters a {
   display: flex; align-items: center; gap: 8px;
   min-height: 40px; padding: 8px 10px;
@@ -551,8 +660,15 @@ input.search::placeholder { color: var(--tx3); }
 }
 .player-root video { width: 100%; height: 100%; object-fit: contain; }
 
-/* A tap reveals the dock. On touch screens this is the only way to reach playback. */
+/* Gesture hit area over the video. Desktop: click pauses. Touch: tap toggles chrome. */
 .player-gesture { position: absolute; inset: 0; z-index: 1; }
+
+/* Desktop: hide the cursor with the chrome (Vidstack base theme does the same). */
+@media (hover: hover) and (pointer: fine) {
+  .player-root[data-started]:not([data-controls]):not(:has(.player-lang-menu)) {
+    cursor: none;
+  }
+}
 
 .player-controls { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
 .player-controls .reader-bar {
@@ -660,6 +776,18 @@ input.search::placeholder { color: var(--tx3); }
   transform: translateY(-50%) scale(0);
   transition: transform 120ms ease, opacity 120ms ease;
 }
+.player-root .skip-marker {
+  position: absolute; z-index: 3; top: 50%; left: var(--marker-at);
+  width: 16px; height: 18px; margin: -9px 0 0 -8px; padding: 0;
+  border: 0; background: transparent; cursor: pointer;
+}
+.player-root .skip-marker::after {
+  content: ""; position: absolute; top: 4px; bottom: 4px; left: 7px; width: 2px;
+  border-radius: 1px; background: var(--highlight); opacity: .9;
+}
+.player-root .skip-marker:hover::after,
+.player-root .skip-marker:focus-visible::after { width: 3px; left: 6.5px; background: var(--tx); }
+.player-root .skip-marker:focus-visible { outline: 2px solid var(--highlight); outline-offset: 2px; }
 .player-root .scrub-v:hover .scrub-track,
 .player-root .scrub-v[data-active] .scrub-track,
 .player-root .scrub-v[data-focus] .scrub-track { height: 6px; }
@@ -859,8 +987,20 @@ input.search::placeholder { color: var(--tx3); }
   bottom: 168px;
 }
 
-/* Chapter lists get long — 764 rows should not own the page. */
-.scrollbox { max-height: 62vh; overflow-y: auto; padding-right: 4px; padding-bottom: 12px; }
+/* Chapter lists get long — 764 rows should not own the page.
+   Edge overscroll chains to the page (default); no bottom spacer that
+   scrolls rows off-screen. */
+.scrollbox {
+  max-height: 62vh;
+  overflow-y: auto;
+  padding-right: 4px;
+  padding-bottom: 12px;
+  overscroll-behavior-y: auto;
+}
+.chapter-scrollbox {
+  height: calc(100dvh - 56px - 28px - 32px - env(safe-area-inset-top, 0px));
+  max-height: none;
+}
 .row.here { box-shadow: inset 2px 0 var(--accent); }
 .row.off { opacity: 0.45; }
 
@@ -869,19 +1009,31 @@ input.search::placeholder { color: var(--tx3); }
   min-height: 100vh; display: grid; place-items: center; padding: var(--pad);
 }
 .people { display: flex; gap: 26px; flex-wrap: wrap; justify-content: center; margin-top: 30px; }
+.people > form { animation: profile-in 360ms var(--ease, ease) both; }
 .person {
   display: flex; flex-direction: column; align-items: center; gap: 11px;
   background: none; border: 0; cursor: pointer; color: var(--tx2);
+  transition: color 180ms var(--ease, ease);
 }
 .person .pfp {
   width: 96px; height: 96px; font-size: 34px;
   outline: 2px solid transparent; outline-offset: 4px;
-  transition: outline-color 120ms var(--ease, ease);
+  transition: transform 180ms var(--ease, ease), outline-color 120ms var(--ease, ease);
 }
-.person:hover .pfp, .person:focus-visible .pfp { outline-color: var(--tx); }
+.person:hover .pfp, .person:focus-visible .pfp { outline-color: var(--tx); transform: scale(1.08); }
+.person:active .pfp { transform: scale(.96); }
 .person:hover, .person:focus-visible { color: var(--tx); }
+@keyframes profile-in {
+  from { opacity: 0; transform: translateY(14px) scale(.96); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .people > form { animation: none; }
+  .person, .person .pfp { transition: none; }
+}
 
-@media (max-width: 900px) {
+/* Phone chrome: portrait width, or a short landscape where 240px rail eats the banner. */
+@media (max-width: 900px), (orientation: landscape) and (max-height: 500px) {
   :root { --pad: 20px; }
   .hero { min-height: 360px; }
   h1 { font-size: 30px; }
@@ -906,7 +1058,20 @@ input.search::placeholder { color: var(--tx3); }
     padding: 8px 10px; font-size: 11px;
   }
   main { padding-bottom: 84px; }
+  /* Phone: one page scroll — nested overflow traps swipe at the edges. */
+  .scrollbox,
+  .chapter-scrollbox {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
   .settings-form { grid-template-columns: 1fr; }
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .hero { min-height: 220px; }
+  .topbar { gap: 14px; }
+  main { padding-bottom: 72px; }
 }
 
 @media (max-width: 560px) {
@@ -1001,6 +1166,12 @@ input.search::placeholder { color: var(--tx3); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.player-nextup:has(+ .player-skip) { bottom: 168px; }
+.player-skip {
+  position: absolute; z-index: 4; right: 24px; bottom: 108px;
+  pointer-events: none;
+}
+.player-skip .btn { pointer-events: auto; }
 
 .sr-only {
   position: absolute; width: 1px; height: 1px;
