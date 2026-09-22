@@ -21,7 +21,9 @@ services:
       - suwayomi
     volumes:
       # Same SQLite as `npm run dev`. A named volume hid existing anime addons from the phone.
-      - ./data:/data
+      - type: bind
+        source: ${LACRIMA_DATA_DIR:-./data}
+        target: /data
     environment:
       TZ: Europe/Berlin
       # Also the proxy allowlist: /api/proxy only relays to this host.

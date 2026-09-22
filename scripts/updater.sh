@@ -56,9 +56,14 @@ apply() {
     sql "update app_updates set requested_at=null, last_status='Update skipped: the checkout is detached.' where singleton=1;"
     return
   fi
+  data_dir="$(docker inspect lacrima --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}')"
+  if [ -z "$data_dir" ]; then
+    sql "update app_updates set requested_at=null, last_status='Update failed: Lacrima data storage was not found.' where singleton=1;"
+    return
+  fi
   updated="$(now)"
   sql "update app_updates set requested_at=null, last_status='Pulling and rebuilding Lacrima.' where singleton=1;"
-  if gitcmd pull --ff-only origin "$branch" && docker compose --project-directory /workspace --project-name lacrima --profile serve up -d --build lacrima; then
+  if gitcmd pull --ff-only origin "$branch" && LACRIMA_DATA_DIR="$data_dir" docker compose --project-directory /workspace --project-name lacrima --profile serve up -d --build lacrima; then
     sql "update app_updates set last_updated_at=$updated, last_applied_tag=$(quote "$tag"), last_status='Lacrima was updated and restarted.' where singleton=1;"
   else
     sql "update app_updates set last_status='Update failed. Check the lacrima-updater container logs.' where singleton=1;"
