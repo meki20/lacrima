@@ -41,7 +41,13 @@ yarn-error.log*
 next-env.d.ts
 
 # lacrima
-data/
+/data/
+/android/.gradle/
+/android/.gradle-agent/
+/android/local.properties
+/android/**/build/
+*.hprof
+/lacrima-debug.apk
 
 # tailscale-issued certs are per-machine secrets
 /certs/*
