@@ -1,0 +1,22 @@
+# Build context is only the Next.js app. Runtime data lives in the
+# compose volume `lacrima-data`, not in this COPY.
+
+.git
+.gitignore
+.cursor
+.claude
+.agents
+.codex
+
+node_modules
+.next
+out
+coverage
+data
+certs
+*.apk
+*.pem
+
+android
+mockups
+graphify-out

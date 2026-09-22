@@ -20,13 +20,18 @@ services:
     depends_on:
       - suwayomi
     volumes:
-      - lacrima-data:/data
+      # Same SQLite as `npm run dev`. A named volume hid existing anime addons from the phone.
+      - ./data:/data
     environment:
       TZ: Europe/Berlin
       # Also the proxy allowlist: /api/proxy only relays to this host.
       SUWAYOMI_URL: http://suwayomi:4567
       LACRIMA_DB: /data/lacrima.db
+      # Decoder fallbacks become 8-bit H.264 with the RTX instead of CPU x264.
+      LACRIMA_H264_ENCODER: ${LACRIMA_H264_ENCODER:-h264_nvenc}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
       # LACRIMA_LANGS: en,all
+    gpus: all
 
   caddy:
     profiles: ["serve"]
@@ -36,16 +41,13 @@ services:
     depends_on:
       - lacrima
     ports:
-      - "80:80"
-      - "443:443"
+      - "7345:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./certs:/certs:ro
       - caddy-data:/data
       - caddy-config:/config
 
 volumes:
   suwayomi:
-  lacrima-data:
   caddy-data:
   caddy-config:

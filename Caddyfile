@@ -1,19 +1,16 @@
-# Lacrima is reached over Tailscale, so there is no public DNS and no public
-# certificate authority. Two ways to get HTTPS; pick one.
+# Lacrima has two private entry points:
 #
-# 1. Tailscale issues the cert (recommended — real cert, no warnings):
+# - http://<LAN IP>:7345 serves the local network without any certificate setup.
+# - Tailscale Serve provides an HTTPS route over the tailnet.
 #
-#      tailscale cert <machine>.<tailnet>.ts.net
-#      mv <machine>.<tailnet>.ts.net.{crt,key} ./certs/
+# Start the tailnet route on the host after Caddy is running:
 #
-#    then replace `:80` below with the machine name and uncomment the tls line.
+#      tailscale serve --bg --https=443 http://127.0.0.1:7345
 #
-# 2. Skip TLS entirely. Traffic inside a tailnet is already WireGuard-encrypted,
-#    so plain HTTP over it is not the hole it would be on a LAN. This is the
-#    default here because it works the moment you run `docker compose up`.
+# Serve provisions and renews the Tailscale certificate itself. Caddy only sees
+# its local HTTP request, so the LAN route never depends on certificate files.
 
-:80 {
-	# tls /certs/<machine>.<tailnet>.ts.net.crt /certs/<machine>.<tailnet>.ts.net.key
+(lacrima) {
 
 	encode zstd gzip
 
@@ -25,4 +22,8 @@
 			response_header_timeout 120s
 		}
 	}
+}
+
+:80 {
+	import lacrima
 }
