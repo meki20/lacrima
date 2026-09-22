@@ -49,6 +49,15 @@ next-env.d.ts
 *.hprof
 /lacrima-debug.apk
 
+# Local agent instructions and scratch planning
+/AGENTS.md
+/CLAUDE.md
+/PLAN.md
+/NOTES.md
+/.claude/
+/.cursor/
+/.kilo/
+
 # tailscale-issued certs are per-machine secrets
 /certs/*
 !/certs/README.md
