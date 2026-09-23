@@ -84,6 +84,7 @@ import {
 } from "@/lib/api/http";
 import { sanitizeNovelHtml } from "@/lib/api/sanitize";
 import { skipTimes } from "@/lib/skip-times";
+import packageJson from "../../../../package.json" with { type: "json" };
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -179,7 +180,7 @@ async function bootstrap(req: Request) {
   const [health] = await Promise.all([sourceHealth()]);
   return apiOk({
     apiVersion: 1,
-    server: { name: "Lacrima", version: "0.1.0" },
+    server: { name: "Lacrima", version: packageJson.version },
     capabilities: {
       anime: true,
       manga: true,

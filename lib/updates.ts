@@ -118,9 +118,10 @@ export function releaseFromGithub(value: unknown): Release | null {
 export function releaseVersion(release: Release | null, installed = packageJson.version) {
   const current = versionKey(installed);
   const available = versionKey(release?.tag);
-  return available && available === current
-    ? { label: `Version ${available}`, update_available: false }
-    : { label: "local dev", update_available: Boolean(available) };
+  return {
+    label: current ? `Version v${current}` : "local dev",
+    update_available: Boolean(available && available !== current),
+  };
 }
 
 function validTime(value: unknown): value is string {

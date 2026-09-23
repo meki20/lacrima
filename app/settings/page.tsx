@@ -1,4 +1,5 @@
 import TopBar from "@/components/TopBar";
+import BackupTransfer from "@/components/BackupTransfer";
 import SettingsForm from "@/components/SettingsForm";
 import UpdateSettings from "@/components/UpdateSettings";
 import { currentProfile } from "@/lib/profile";
@@ -17,6 +18,7 @@ export default async function Settings() {
   return <><TopBar active="Settings" /><main className="settings-page">
     <header className="settings-title"><div><span className="mono">{me.name}&apos;s account</span><h1>Settings</h1></div></header>
     <SettingsForm initial={settings} />
+    <BackupTransfer kind="profile" title="Profile backup" description="Your library, progress, reader defaults, playback history and stickers." importNote="Import replaces this profile’s saved data." />
     <UpdateSettings initial={updates} />
     <section className="settings-card providers-card"><div><h2>Best providers</h2><p>Confirmed after 15 seconds of playback. Your account only.</p></div>
       {total ? <div className="provider-stats"><div className="provider-pie" role="img" aria-label={`${total} provider selections`} style={{ background: `conic-gradient(${pie})` }}><span>{total}<small>plays</small></span></div><div className="provider-list">{providers.map((p, i) => <div key={p.provider}><i style={{ background: COLORS[i % COLORS.length] }} /><b>{p.provider}</b><span>{p.times} {p.times === 1 ? "time" : "times"} · {Math.round((p.times / total) * 100)}%</span></div>)}</div></div> : <div className="empty"><b>No provider history yet</b>Watch an episode for a few seconds and its provider will appear here.</div>}

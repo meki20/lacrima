@@ -1,6 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import TopBar from "@/components/TopBar";
+import BackupTransfer from "@/components/BackupTransfer";
 import { Failed } from "@/components/ui";
 import type { MediaKind } from "@/lib/media";
 import { backend, clearSourceHealth } from "@/lib/sources";
@@ -123,6 +124,8 @@ export default async function Sources({
             </a>
           ))}
         </div>
+
+        <BackupTransfer kind="sources" title="Source backup" description="Repository lists, extension choices and source switches for manga, anime and novels." importNote="Import adds the saved sources without removing the ones already here." />
 
         <section>
           <div className="row-h">

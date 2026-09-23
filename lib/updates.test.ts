@@ -18,7 +18,7 @@ test("GitHub release data is reduced to a safe public status", () => {
 
 test("only a release different from the installed package enables updating", () => {
   const release = releaseFromGithub({ tag_name: "v1.0.1", html_url: "https://github.com/meki20/lacrima/releases/tag/v1.0.1" });
-  assert.deepEqual(releaseVersion(release, "1.0.0"), { label: "local dev", update_available: true });
-  assert.deepEqual(releaseVersion(release, "1.0.1"), { label: "Version 1.0.1", update_available: false });
-  assert.deepEqual(releaseVersion(null, "1.0.1"), { label: "local dev", update_available: false });
+  assert.deepEqual(releaseVersion(release, "1.0.0"), { label: "Version v1.0.0", update_available: true });
+  assert.deepEqual(releaseVersion(release, "1.0.1"), { label: "Version v1.0.1", update_available: false });
+  assert.deepEqual(releaseVersion(null, "1.0.4-alpha"), { label: "Version v1.0.4-alpha", update_available: false });
 });
