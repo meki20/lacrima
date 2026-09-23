@@ -120,8 +120,20 @@ export function releaseVersion(release: Release | null, installed = packageJson.
   const available = versionKey(release?.tag);
   return {
     label: current ? `Version v${current}` : "local dev",
-    update_available: Boolean(available && available !== current),
+    update_available: newerVersion(available, current),
   };
+}
+
+function newerVersion(candidate: string, installed: string) {
+  const pattern = /^(\d+)\.(\d+)\.(\d+)(?:-([\da-z.-]+))?$/i;
+  const next = pattern.exec(candidate);
+  const current = pattern.exec(installed);
+  if (!next || !current) return false;
+  for (let i = 1; i <= 3; i++) {
+    if (+next[i] !== +current[i]) return +next[i] > +current[i];
+  }
+  if (!next[4] || !current[4]) return !next[4] && Boolean(current[4]);
+  return next[4].localeCompare(current[4], undefined, { numeric: true }) > 0;
 }
 
 function validTime(value: unknown): value is string {

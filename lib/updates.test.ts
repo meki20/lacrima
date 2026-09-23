@@ -16,9 +16,12 @@ test("GitHub release data is reduced to a safe public status", () => {
   assert.equal(releaseFromGithub({ tag_name: "v1", html_url: "https://not-github.example/release" }), null);
 });
 
-test("only a release different from the installed package enables updating", () => {
+test("only a newer release enables updating", () => {
   const release = releaseFromGithub({ tag_name: "v1.0.1", html_url: "https://github.com/meki20/lacrima/releases/tag/v1.0.1" });
   assert.deepEqual(releaseVersion(release, "1.0.0"), { label: "Version v1.0.0", update_available: true });
   assert.deepEqual(releaseVersion(release, "1.0.1"), { label: "Version v1.0.1", update_available: false });
   assert.deepEqual(releaseVersion(null, "1.0.4-alpha"), { label: "Version v1.0.4-alpha", update_available: false });
+  assert.equal(releaseVersion({ ...release!, tag: "v1.0.2-alpha" }, "1.0.4-alpha").update_available, false);
+  assert.equal(releaseVersion({ ...release!, tag: "v1.0.4" }, "1.0.4-alpha").update_available, true);
+  assert.equal(releaseVersion({ ...release!, tag: "v1.0.4-alpha.10" }, "1.0.4-alpha.2").update_available, true);
 });
