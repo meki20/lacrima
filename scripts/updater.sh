@@ -5,11 +5,18 @@ DB="${LACRIMA_DB:-/data/lacrima.db}"
 REPO="https://github.com/meki20/lacrima.git"
 API="https://api.github.com/repos/meki20/lacrima/releases?per_page=1"
 
-sql() { sqlite3 "$DB" "$1"; }
+sql() { sqlite3 -cmd '.timeout 5000' "$DB" "$1"; }
 now() { date +%s000; }
 
+heartbeat() {
+  while true; do
+    sql "update app_updates set updater_heartbeat=$(now) where singleton=1;" >/dev/null 2>&1 || true
+    sleep 20
+  done
+}
+
 release() {
-  reply="$(curl -sSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Lacrima-updater' -w '\n%{http_code}' "$API" || true)"
+  reply="$(curl -sSL --connect-timeout 10 --max-time 30 -H 'Accept: application/vnd.github+json' -H 'User-Agent: Lacrima-updater' -w '\n%{http_code}' "$API" || true)"
   code="$(printf '%s' "$reply" | tail -n 1)"
   body="$(printf '%s' "$reply" | sed '$d')"
   checked="$(now)"
@@ -33,46 +40,69 @@ release() {
 
 quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
 
+fail() {
+  sql "update app_updates set requested_at=null, last_status=$(quote "$1") where singleton=1;"
+  printf '%s\n' "$1" >&2
+}
+
 gitcmd() {
-  if git -C /workspace ls-files --eol | grep -q 'w/crlf'; then
-    git -C /workspace -c core.autocrlf=true "$@"
+  owner="$(stat -c '%u:%g' /workspace)"
+  if su-exec "$owner" git -C /workspace ls-files --eol | grep -q 'w/crlf'; then
+    su-exec "$owner" git -C /workspace -c core.autocrlf=true "$@"
   else
-    git -C /workspace "$@"
+    su-exec "$owner" git -C /workspace "$@"
   fi
 }
 
 apply() {
   tag="$1"
-  if [ "$(gitcmd config --get remote.origin.url || true)" != "$REPO" ]; then
-    sql "update app_updates set requested_at=null, last_status='The checkout remote is not the Lacrima repository.' where singleton=1;"
+  if ! remote="$(gitcmd config --get remote.origin.url)"; then
+    fail 'Update failed: the updater cannot read the checkout Git configuration.'
     return
   fi
-  if [ -n "$(gitcmd status --porcelain)" ]; then
-    sql "update app_updates set requested_at=null, last_status='Update skipped: the checkout has local changes.' where singleton=1;"
+  if [ "$remote" != "$REPO" ]; then
+    fail 'The checkout remote is not the Lacrima repository.'
     return
   fi
-  branch="$(gitcmd branch --show-current)"
+  if ! changes="$(gitcmd status --porcelain)"; then
+    fail 'Update failed: the updater cannot inspect the checkout.'
+    return
+  fi
+  if [ -n "$changes" ]; then
+    fail 'Update skipped: the checkout has local changes.'
+    return
+  fi
+  if ! branch="$(gitcmd branch --show-current)"; then
+    fail 'Update failed: the updater cannot read the checkout branch.'
+    return
+  fi
   if [ -z "$branch" ]; then
-    sql "update app_updates set requested_at=null, last_status='Update skipped: the checkout is detached.' where singleton=1;"
+    fail 'Update skipped: the checkout is detached.'
     return
   fi
-  data_dir="$(docker inspect lacrima --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}')"
+  if ! data_dir="$(docker inspect lacrima --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}')"; then
+    fail 'Update failed: Lacrima data storage could not be inspected.'
+    return
+  fi
   if [ -z "$data_dir" ]; then
-    sql "update app_updates set requested_at=null, last_status='Update failed: Lacrima data storage was not found.' where singleton=1;"
+    fail 'Update failed: Lacrima data storage was not found.'
     return
   fi
   updated="$(now)"
-  sql "update app_updates set requested_at=null, last_status='Pulling and rebuilding Lacrima.' where singleton=1;"
+  sql "update app_updates set last_status='Pulling and rebuilding Lacrima.' where singleton=1;"
   if gitcmd pull --ff-only origin "$branch" && LACRIMA_DATA_DIR="$data_dir" docker compose --project-directory /workspace --project-name lacrima --profile serve up -d --build lacrima; then
-    sql "update app_updates set last_updated_at=$updated, last_applied_tag=$(quote "$tag"), last_status='Lacrima was updated and restarted.' where singleton=1;"
+    sql "update app_updates set requested_at=null, last_updated_at=$updated, last_applied_tag=$(quote "$tag"), last_status='Lacrima was updated and restarted.' where singleton=1;"
   else
-    sql "update app_updates set last_status='Update failed. Check the lacrima-updater container logs.' where singleton=1;"
+    fail 'Update failed. Check the lacrima-updater container logs.'
   fi
 }
 
+heartbeat &
+heartbeat_pid=$!
+trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
+
 while true; do
   if sql 'select 1 from app_updates where singleton=1;' >/dev/null 2>&1; then
-    sql "update app_updates set updater_heartbeat=$(now) where singleton=1;"
     row="$(sql 'select auto_update, update_time, requested_at, coalesce(last_auto_day, ""), coalesce(last_applied_tag, "") from app_updates where singleton=1;')"
     auto="$(printf '%s' "$row" | cut -d'|' -f1)"
     time="$(printf '%s' "$row" | cut -d'|' -f2)"
@@ -81,7 +111,8 @@ while true; do
     applied="$(printf '%s' "$row" | cut -d'|' -f5)"
     day="$(date +%F)"
     if [ -n "$requested" ]; then
-      apply "$(release || true)"
+      tag="$(release || true)"
+      if [ -n "$tag" ]; then apply "$tag"; else sql 'update app_updates set requested_at=null where singleton=1;'; fi
     elif [ "$auto" = 1 ] && [ "$(date +%H:%M)" = "$time" ] && [ "$last_day" != "$day" ]; then
       tag="$(release || true)"
       sql "update app_updates set last_auto_day=$(quote "$day") where singleton=1;"

@@ -33,6 +33,8 @@ The server uses Caddy for the LAN route and Tailscale Serve for private HTTPS. M
 
 The Settings page tracks [GitHub releases](https://github.com/meki20/lacrima/releases), queues a manual update, and can check once a day at a chosen 24-hour time. The `updater` companion starts with the `serve` profile. It only accepts the configured Lacrima origin, refuses a dirty checkout, pulls with `--ff-only`, then rebuilds and restarts the `lacrima` container. It needs Docker's local socket, so only run it on a trusted host.
 
+After upgrading from a version with an older updater image, rebuild that companion once with `docker compose --profile serve up -d --build updater` (and the same `LACRIMA_DATA_DIR` value as the app, if configured). The updater deliberately never recreates its own running container.
+
 ## Development
 
 ```bash
