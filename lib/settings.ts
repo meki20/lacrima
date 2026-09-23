@@ -23,6 +23,18 @@ export function profileSettings(profileId: number): Settings {
   return row ? clean(plain(row)) : { ...DEFAULT };
 }
 
+export function subtitleChoice(profileId: number, via: string, mediaId: number, chapterId: string): string | null {
+  const row = db().prepare("select choice from subtitle_choices where profile_id = ? and via = ? and media_id = ? and chapter_id = ?")
+    .get(profileId, via, mediaId, chapterId) as { choice: string } | undefined;
+  return row?.choice ?? null;
+}
+
+export function updateSubtitleChoice(profileId: number, via: string, mediaId: number, chapterId: string, choice: string) {
+  db().prepare(`insert into subtitle_choices (profile_id, via, media_id, chapter_id, choice) values (?, ?, ?, ?, ?)
+    on conflict(profile_id, via, media_id, chapter_id) do update set choice = excluded.choice`)
+    .run(profileId, via, mediaId, chapterId, choice);
+}
+
 export function updateProfileSettings(profileId: number, values: Partial<Settings>) {
   const next = clean({ ...profileSettings(profileId), ...values });
   db().prepare(`insert into profile_settings

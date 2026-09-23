@@ -124,6 +124,9 @@ export function profileBackup(profileId: number): Backup {
       providers: all("select provider, chosen_at from provider_choices where profile_id = ?"),
       stickers: all("select sticker_id, earned_at, x, y, rot, surface from stickers where profile_id = ?"),
       placements: all("select sticker_id, path, x, y, scale, rot, surface from sticker_placements where profile_id = ?"),
+      stickerPools: all(`select via, media_id, payload, fetched_at from sticker_pools where exists
+        (select 1 from stickers where profile_id = ? and sticker_id like sticker_pools.via || ':' || sticker_pools.media_id || ':%')`),
+      subtitleChoices: all("select via, media_id, chapter_id, choice from subtitle_choices where profile_id = ?"),
     },
   };
 }
@@ -140,12 +143,14 @@ export function restoreProfile(profileId: number, backup: Backup) {
   const providers = rows(data.providers, "providers").map(restoreProvider);
   const stickers = rows(data.stickers, "stickers").map(restoreSticker);
   const placements = rows(data.placements, "placements").map(restorePlacement);
+  const stickerPools = rows(data.stickerPools ?? [], "sticker pools").map(restoreStickerPool);
+  const subtitleChoices = rows(data.subtitleChoices ?? [], "subtitle choices").map(restoreSubtitleChoice);
   const d = db();
   d.exec("begin");
   try {
     d.prepare("update profiles set name = ?, avatar_color = ?, accent = ?, wallpaper = ?, created_at = ?, caption_x = ?, caption_y = ? where id = ?")
       .run(profile.name, profile.avatar, profile.accent, profile.wallpaper, profile.createdAt, profile.captionX, profile.captionY, profileId);
-    for (const table of ["profile_genres", "library", "progress", "activity", "provider_choices", "stickers", "sticker_placements", "profile_settings"]) {
+    for (const table of ["profile_genres", "library", "progress", "activity", "provider_choices", "stickers", "sticker_placements", "subtitle_choices", "profile_settings"]) {
       d.prepare(`delete from ${table} where profile_id = ?`).run(profileId);
     }
     if (settings) updateProfileSettings(profileId, settings);
@@ -159,10 +164,15 @@ export function restoreProfile(profileId: number, backup: Backup) {
     for (const row of unique(activity, (r) => r.day)) day.run(profileId, row.day, row.anime, row.manga, row.novel, row.night);
     const choice = d.prepare("insert into provider_choices (profile_id, provider, chosen_at) values (?, ?, ?)");
     for (const row of providers) choice.run(profileId, row.provider, row.chosenAt);
+    const pool = d.prepare(`insert into sticker_pools (via, media_id, payload, fetched_at) values (?, ?, ?, ?)
+      on conflict(via, media_id) do update set payload = excluded.payload, fetched_at = excluded.fetched_at`);
+    for (const row of unique(stickerPools, (r) => `${r.via}:${r.mediaId}`)) pool.run(row.via, row.mediaId, row.payload, row.fetchedAt);
     const sticker = d.prepare("insert into stickers (profile_id, sticker_id, earned_at, x, y, rot, surface) values (?, ?, ?, ?, ?, ?, ?)");
     for (const row of unique(stickers, (r) => r.id)) sticker.run(profileId, row.id, row.earnedAt, row.x, row.y, row.rot, row.surface);
     const placement = d.prepare("insert into sticker_placements (profile_id, sticker_id, path, x, y, scale, rot, surface) values (?, ?, ?, ?, ?, ?, ?, ?)");
     for (const row of placements) placement.run(profileId, row.id, row.path, row.x, row.y, row.scale, row.rot, row.surface);
+    const subtitle = d.prepare("insert into subtitle_choices (profile_id, via, media_id, chapter_id, choice) values (?, ?, ?, ?, ?)");
+    for (const row of unique(subtitleChoices, (r) => `${r.via}:${r.mediaId}:${r.chapterId}`)) subtitle.run(profileId, row.via, row.mediaId, row.chapterId, row.choice);
     d.exec("commit");
   } catch (error) {
     d.exec("rollback");
@@ -350,6 +360,23 @@ function restoreProgress(row: Json) {
 function restoreActivity(row: Json) { return { day: text(row.day, "activity day", 10), anime: whole(row.anime, "anime activity"), manga: whole(row.manga, "manga activity"), novel: whole(row.novel, "novel activity"), night: whole(row.night, "night activity") }; }
 function restoreProvider(row: Json) { return { provider: text(row.provider, "provider", 160), chosenAt: whole(row.chosen_at, "provider date") }; }
 function restoreSticker(row: Json) { return { id: text(row.sticker_id, "sticker", 500), earnedAt: row.earned_at == null ? null : whole(row.earned_at, "sticker date"), x: nullableNumber(row.x, "sticker position"), y: nullableNumber(row.y, "sticker position"), rot: finite(row.rot, "sticker rotation", -360_000, 360_000), surface: row.surface == null ? null : parseSurface(text(row.surface, "sticker surface", 10)) }; }
+function restoreStickerPool(row: Json) {
+  const provider = via(row.via);
+  const mediaId = whole(row.media_id, "sticker title id", 1);
+  const payload = text(row.payload, "sticker pool", 1_000_000);
+  let parsed: unknown;
+  try { parsed = JSON.parse(payload); } catch { throw new Error("Backup sticker pool is invalid."); }
+  const defs = Array.isArray(parsed) ? parsed : isRecord(parsed) ? parsed.defs : null;
+  if (!Array.isArray(defs) || defs.length > 100 || defs.some((item) =>
+    !isRecord(item) || typeof item.id !== "string" || !item.id.startsWith(`${provider}:${mediaId}:`) ||
+    typeof item.name !== "string" || item.name.length > 500 ||
+    (item.image !== null && (typeof item.image !== "string" || item.image.length > 2_000)) ||
+    typeof item.secret !== "boolean")) throw new Error("Backup sticker pool is invalid.");
+  return { via: provider, mediaId, payload, fetchedAt: whole(row.fetched_at, "sticker pool date") };
+}
+function restoreSubtitleChoice(row: Json) {
+  return { via: via(row.via), mediaId: whole(row.media_id, "subtitle title id", 1), chapterId: text(row.chapter_id, "subtitle episode", 500), choice: text(row.choice, "subtitle choice", 8_000) };
+}
 function restorePlacement(row: Json) {
   const path = pagePath(text(row.path, "sticker path", 400));
   if (!path || (!chromeKind(path) && placeBlocked(path))) throw new Error("Backup sticker path is invalid.");

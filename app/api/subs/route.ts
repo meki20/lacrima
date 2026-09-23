@@ -1,5 +1,7 @@
 import type { ProviderSlug } from "@/lib/media";
 import { resolveEmbeddedSubtitles, resolveSubtitles } from "@/lib/sources/stremio";
+import { currentProfile } from "@/lib/profile";
+import { updateSubtitleChoice } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -38,4 +40,18 @@ export async function GET(req: Request) {
   });
   if (!r.ok) return Response.json({ error: r.reason }, { status: 502 });
   return Response.json({ cues: r.value });
+}
+
+export async function PUT(req: Request) {
+  let body: { via?: unknown; mediaId?: unknown; chapterId?: unknown; choice?: unknown };
+  try { body = await req.json(); } catch { return Response.json({ error: "Bad json" }, { status: 400 }); }
+  if (!body || typeof body.via !== "string" || !["anilist", "jikan", "kitsu"].includes(body.via) ||
+    !Number.isSafeInteger(body.mediaId) || Number(body.mediaId) <= 0 ||
+    typeof body.chapterId !== "string" || !body.chapterId || body.chapterId.length > 500 ||
+    typeof body.choice !== "string" || !body.choice || body.choice.length > 8_000) {
+    return Response.json({ error: "Invalid subtitle choice" }, { status: 400 });
+  }
+  const me = await currentProfile();
+  updateSubtitleChoice(me.id, body.via, body.mediaId as number, body.chapterId, body.choice);
+  return Response.json({ ok: true });
 }

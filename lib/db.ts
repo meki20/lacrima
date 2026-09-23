@@ -343,6 +343,18 @@ const MIGRATIONS: string[] = [
     );
     insert or ignore into app_updates (singleton) values (1);
   `,
+
+  // 17 — an external subtitle file is specific to an episode, not a playback default.
+  `
+    create table subtitle_choices (
+      profile_id integer not null references profiles(id) on delete cascade,
+      via        text    not null,
+      media_id   integer not null,
+      chapter_id text    not null,
+      choice     text    not null,
+      primary key (profile_id, via, media_id, chapter_id)
+    );
+  `,
 ]
 
 function migrate(d: DatabaseSync) {

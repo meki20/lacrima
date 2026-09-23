@@ -62,6 +62,7 @@ import {
   MediaPlayer,
   MediaProvider,
   MuteButton,
+  PIPButton,
   PlayButton,
   VolumeSlider,
   isHLSProvider,
@@ -107,6 +108,7 @@ const PATH = {
   vol: "M4 9.5h3L11 6v12L7 14.5H4zm10.5-1a4.5 4.5 0 0 1 0 7",
   mute: "M4 9.5h3L11 6v12L7 14.5H4zm11 0 4 5m0-5-4 5",
   full: "M4 9V4h5M20 9V4h-5M4 15v5h5m11-5v5h-5",
+  popOut: "M3 5h18v14H3zM11 11h8v6h-8z",
   arrow: "M14 6l-6 6 6 6",
 };
 
@@ -257,6 +259,7 @@ export default function Player({
   durationSeconds,
   progress,
   settings,
+  savedSub,
 }: {
   title: string;
   episodeLabel: string;
@@ -271,6 +274,7 @@ export default function Player({
   durationSeconds: number | null;
   progress: ProgressWrite;
   settings: { audio_lang: Lang; subtitle_lang: string; caption_scale: number };
+  savedSub: string | null;
 }) {
   const router = useRouter();
   const player = useRef<MediaPlayerInstance>(null);
@@ -312,9 +316,8 @@ export default function Player({
   const [subErr, setSubErr] = useState<string | null>(null);
   const [subLoading, setSubLoading] = useState(true);
   const [subFresh, setSubFresh] = useState(0);
-  const [subLang, setSubLang] = useState<SubChoice>(() =>
-    settings.subtitle_lang,
-  );
+  const [preferredSub, setPreferredSub] = useState<SubChoice>(() => savedSub ?? settings.subtitle_lang);
+  const [subLang, setSubLang] = useState<SubChoice>(() => savedSub ?? settings.subtitle_lang);
   const [captionScale, setCaptionScale] = useState(() =>
     settings.caption_scale,
   );
@@ -352,7 +355,13 @@ export default function Player({
   const withCache = (url: string | null) =>
     url ? withCacheParams(url, cacheCtx) : null;
   const saveSettings = (patch: Record<string, string | number>) =>
-    void fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).catch(() => {});
+    void fetch("/api/settings", { method: "PUT", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).catch(() => {});
+  const saveSub = (choice: SubChoice) => {
+    setPreferredSub(choice);
+    void fetch("/api/subs", { method: "PUT", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify({
+      via: progress.via, mediaId: progress.mediaId, chapterId: String(progress.chapterId), choice,
+    }) }).catch(() => {});
+  };
 
   const writeProgress = useCallback(
     (seconds: number) => {
@@ -900,12 +909,9 @@ export default function Player({
       else if (e.key === "n" && nextHref) router.push(nextHref);
       else if (e.key.toLowerCase() === "c") {
         e.preventDefault();
-        setSubLang((cur) => {
-          const next = toggleSubChoice(cur, lastSub.current);
-          localStorage.setItem("lacrima-subs", next);
-          saveSettings({ subtitle_lang: next === "off" ? "off" : "auto" });
-          return next;
-        });
+        const next = toggleSubChoice(subLang, lastSub.current);
+        setSubLang(next);
+        saveSub(next);
       } else {
         const jump = jumpPercent(clockDuration, e.key);
         if (jump != null) {
@@ -916,7 +922,7 @@ export default function Player({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [backHref, clockDuration, nextHref, router, seekBy, seekTo]);
+  }, [backHref, clockDuration, nextHref, router, seekBy, seekTo, subLang]);
 
   /* Only once a group is actually chosen, so this cannot flash while resolving. */
   const wrongLang = group && group.lang !== lang ? group : null;
@@ -925,8 +931,8 @@ export default function Player({
 
   useEffect(() => {
     if (subLoading) return;
-    setSubLang(pickSubLang(cues, audioLang, settings.subtitle_lang));
-  }, [cues, subLoading, audioLang, settings.subtitle_lang]);
+    setSubLang(pickSubLang(cues, audioLang, preferredSub));
+  }, [cues, subLoading, audioLang, preferredSub]);
 
   /* Softsubs inside the torrent become readable as early clusters land — keep
      polling and refresh the growing extract until the file is complete. */
@@ -1288,8 +1294,7 @@ export default function Player({
                   subError={subErr}
                   onPickSub={(choice) => {
                     setSubLang(choice);
-                    localStorage.setItem("lacrima-subs", choice);
-                    saveSettings({ subtitle_lang: choice === "off" ? "off" : "auto" });
+                    saveSub(choice);
                   }}
                   subSync={subSync}
                   onSubSync={(n) => {
@@ -1300,7 +1305,6 @@ export default function Player({
                   captionScale={captionScale}
                   onCaptionScale={(n) => {
                     setCaptionScale(n);
-                    localStorage.setItem("lacrima-caption-scale", String(n));
                     saveSettings({ caption_scale: n });
                   }}
                   onRefreshSubs={() => setSubFresh((n) => n + 1)}
@@ -1314,6 +1318,7 @@ export default function Player({
                   <Icon d={PATH.next} />
                 </a>
               )}
+              <PlayerPopOut />
               <PlayerFullscreen player={player} />
             </div>
           </div>
@@ -1673,6 +1678,17 @@ function Volume() {
   const muted = useMediaState("muted");
   const volume = useMediaState("volume");
   return <Icon d={muted || volume === 0 ? PATH.mute : PATH.vol} filled={false} />;
+}
+
+function PlayerPopOut() {
+  const supported = useMediaState("canPictureInPicture");
+  const active = useMediaState("pictureInPicture");
+  if (!supported) return null;
+  return (
+    <PIPButton className="pbtn" aria-label={active ? "Close pop-out player" : "Pop out player"} title={active ? "Close pop-out player" : "Pop out player"}>
+      <Icon d={PATH.popOut} filled={false} />
+    </PIPButton>
+  );
 }
 
 function PlayerFullscreen({ player }: { player: { current: MediaPlayerInstance | null } }) {

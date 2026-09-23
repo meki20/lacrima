@@ -9,7 +9,7 @@ import { fetchTitle } from "@/lib/metadata";
 import { titleBackHref } from "@/lib/nav";
 import { paragraphIndex } from "@/lib/novel-html";
 import { currentProfile } from "@/lib/profile";
-import { profileSettings, readerSettings } from "@/lib/settings";
+import { profileSettings, readerSettings, subtitleChoice } from "@/lib/settings";
 import type { ProgressWrite } from "@/lib/progress-write";
 import { getProgress, parseAnchor } from "@/lib/progress";
 import { loadPlaylist } from "@/lib/play-cache";
@@ -90,6 +90,7 @@ export default async function Read({
     fetchSeries(via, kind, mediaId),
   ]);
   const settings = profileSettings(me.id);
+  const savedSub = kind === "anime" ? subtitleChoice(me.id, via, mediaId, chapterId) : null;
 
   back = titleBackHref(via, kind, mediaId, seriesR.ok ? seriesR.value : null);
 
@@ -172,6 +173,8 @@ export default async function Read({
     const upNext = at >= 0 ? chapters[at + 1] : undefined;
     return (
       <Player
+        key={`${via}:${mediaId}:${chapterId}`}
+        savedSub={savedSub}
         title={m.title}
         episodeLabel={chapterLabel}
         backHref={back}
