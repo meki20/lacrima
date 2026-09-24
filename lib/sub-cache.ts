@@ -234,8 +234,8 @@ export function ensureSubFiles(ctx: CacheCtx, cues: SubCue[]): void {
 
 export function mimeForSub(url: string): string {
   const t = cueType(url);
-  if (t === "srt") return "text/plain; charset=utf-8";
-  if (t === "ass" || t === "ssa") return "text/plain; charset=utf-8";
+  if (t === "srt") return "application/x-subrip; charset=utf-8";
+  if (t === "ass" || t === "ssa") return "text/x-ssa; charset=utf-8";
   return "text/vtt; charset=utf-8";
 }
 

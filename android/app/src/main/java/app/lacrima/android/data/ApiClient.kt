@@ -18,6 +18,27 @@ class ApiClient(private val baseUrl: String, private val profileId: Int?) {
     /** Fetches a server-returned legacy/API URL without forcing it under /api/v1. */
     fun getAbsoluteJson(pathOrUrl: String): ApiResult<Any> = request("GET", absolute(pathOrUrl), allowRaw = true)
 
+    /** Reads a server-proxied subtitle file without wrapping it in the JSON API envelope. */
+    fun getTextAbsolute(pathOrUrl: String): ApiResult<String> {
+        val connection = URL(absolute(pathOrUrl)).openConnection() as HttpURLConnection
+        return try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 8_000
+            connection.readTimeout = 30_000
+            connection.setRequestProperty("Accept", "text/vtt,application/x-subrip,text/x-ssa,text/plain")
+            profileId?.let { connection.setRequestProperty(PROFILE_HEADER, it.toString()) }
+            val status = connection.responseCode
+            val text = (if (status in 200..299) connection.inputStream else connection.errorStream)
+                ?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (status in 200..299) ApiResult.Success(text)
+            else ApiResult.Failure("http_$status", text.ifBlank { "The subtitle file could not be loaded." })
+        } catch (e: IOException) {
+            ApiResult.Failure("network_error", e.message ?: "Could not reach the Lacrima server.")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     fun absolute(pathOrUrl: String): String {
         if (pathOrUrl.startsWith("https://") || pathOrUrl.startsWith("http://")) return pathOrUrl
         return "${baseUrl.trimEnd('/')}/${pathOrUrl.trimStart('/')}"

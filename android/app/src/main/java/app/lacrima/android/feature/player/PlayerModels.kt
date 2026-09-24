@@ -65,6 +65,8 @@ data class SubtitleChoice(
     val label: String,
     val url: String,
     val type: String,
+    /** Context-bound Lacrima HTTP route; never fetch a provider URL from the app. */
+    val src: String = url,
 )
 
 data class TimedCue(val start: Double, val end: Double, val text: String)

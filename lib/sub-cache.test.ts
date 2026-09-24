@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { decodeSubBytes, loadSubBody, loadSubIndex, saveSubIndex, subBodyPath } from "./sub-cache.ts";
+import { decodeSubBytes, loadSubBody, loadSubIndex, mimeForSub, saveSubIndex, subBodyPath } from "./sub-cache.ts";
 import { mediaDir } from "./play-cache.ts";
 
 async function scratch(fn: () => void | Promise<void>) {
@@ -94,6 +94,12 @@ test("utf-16 subtitle files decode to text", () => {
   assert.match(decodeSubBytes(le), /Hi/);
   const utf8 = new TextEncoder().encode("Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hi");
   assert.match(decodeSubBytes(utf8), /Dialogue:/);
+});
+
+test("HTTP subtitle files declare their native text format", () => {
+  assert.equal(mimeForSub("https://cdn.example/ep.srt"), "application/x-subrip; charset=utf-8");
+  assert.equal(mimeForSub("https://cdn.example/ep.ass"), "text/x-ssa; charset=utf-8");
+  assert.equal(mimeForSub("https://cdn.example/ep.vtt"), "text/vtt; charset=utf-8");
 });
 
 test("subtitle files go to tmp when media persist is off", async () => {

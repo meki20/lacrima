@@ -47,12 +47,14 @@ class PlayerApi(private val client: ApiClient) {
                 val root = result.data as? JSONObject ?: error("Subtitle data is not an object.")
                 root.optJSONArray("subtitles")?.objects()?.mapNotNull { cue ->
                     val original = cue.stringOrNull("url") ?: return@mapNotNull null
+                    val src = cue.stringOrNull("src")?.let(client::absolute) ?: return@mapNotNull null
                     SubtitleChoice(
                         id = cue.optString("id", original),
                         lang = cue.optString("lang"),
                         label = cue.optString("label", cue.optString("lang")),
                         url = original,
                         type = cue.optString("type", "vtt"),
+                        src = src,
                     )
                 }.orEmpty()
             }.fold(
@@ -116,23 +118,7 @@ class PlayerApi(private val client: ApiClient) {
             })
         })
 
-    fun subtitleBody(choice: SubtitleChoice, route: PlaybackRoute): ApiResult<String> {
-        val path =
-            "playback/${ApiClient.encode(route.via)}/anime/${route.mediaId}/${ApiClient.encode(route.chapterId)}/subtitles/body"
-        return when (
-            val result = client.post(
-                path,
-                JSONObject().put("id", choice.id).put("url", choice.url),
-            )
-        ) {
-            is ApiResult.Failure -> result
-            is ApiResult.Success -> {
-                val text = (result.data as? JSONObject)?.optString("text").orEmpty()
-                if (text.isBlank()) ApiResult.Failure("empty_subtitles", "This file has no readable cues.")
-                else ApiResult.Success(text)
-            }
-        }
-    }
+    fun subtitleText(choice: SubtitleChoice): ApiResult<String> = client.getTextAbsolute(choice.src)
 
     fun absolute(url: String): String = client.absolute(url)
 

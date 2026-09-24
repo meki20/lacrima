@@ -76,11 +76,10 @@ Metadata artwork is already an absolute HTTPS URL.
   the selected attempt's `commit` object. This updates the shared fast path and the selected
   profile's provider history.
 - `GET /api/v1/playback/{via}/anime/{id}/{chapterId}/subtitles?fresh=1` — subtitle descriptors in
-  `{subtitles}`, including a context-bound `src` for each file.
-- `POST /api/v1/playback/{via}/anime/{id}/{chapterId}/subtitles/body` — `{id, url?}` loads that file
-  through the same cache as the web player and returns `{text}`.
-  `/api/subs/file?...` remains the binary subtitle transport and `/api/stream` remains video transport. Cancelling the active HTTP request is teardown; the native
-  client must not call the global legacy `DELETE /api/stream`.
+  `{subtitles}`, including a context-bound `src` for each file. Request that `src` directly: it is
+  a UTF-8 subtitle response from `/api/subs/file?...`, cached and proxied by the server for both
+  web and native players. `/api/stream` remains video transport. Cancelling the active HTTP request
+  is teardown; the native client must not call the global legacy `DELETE /api/stream`.
 
 ## Profile data
 

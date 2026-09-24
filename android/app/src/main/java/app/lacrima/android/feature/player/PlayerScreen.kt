@@ -411,12 +411,12 @@ private fun NativePlayer(
         }
     }
 
-    LaunchedEffect(selectedSubtitle?.id, selectedSubtitle?.url, subtitleOff, document.route) {
+    LaunchedEffect(selectedSubtitle?.id, selectedSubtitle?.src, subtitleOff, document.route) {
         timedCues = emptyList()
         subtitleBodyError = null
         val choice = selectedSubtitle
         if (subtitleOff || choice == null) return@LaunchedEffect
-        when (val result = withContext(Dispatchers.IO) { api.subtitleBody(choice, document.route) }) {
+        when (val result = withContext(Dispatchers.IO) { api.subtitleText(choice) }) {
             is ApiResult.Failure -> subtitleBodyError = result.message
             is ApiResult.Success -> {
                 timedCues = parseCues(result.data)
