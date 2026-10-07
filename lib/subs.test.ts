@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  appliedShift,
   cueAt,
   cueLabel,
   cueType,
+  castVtt,
   dedupeCues,
   fileHref,
   parseCues,
@@ -106,6 +108,11 @@ test("parseCues reads VTT, SRT and ASS on episode time", () => {
   assert.equal(cueAt(vtt, 182.5), null);
 });
 
+test("cast subtitles convert to WebVTT on the remux clock", () => {
+  const srt = "1\n00:02:59,500 --> 00:03:01,250\nHello\n\n2\n00:03:02,000 --> 00:03:03,000\nAgain";
+  assert.equal(castVtt(srt, 180), "WEBVTT\n\n00:00:00.000 --> 00:00:01.250\nHello\n\n00:00:02.000 --> 00:00:03.000\nAgain\n");
+});
+
 test("caption scale only accepts the three sizes", () => {
   assert.equal(parseCaptionScale(null), 1);
   assert.equal(parseCaptionScale("1.2"), 1.2);
@@ -113,4 +120,27 @@ test("caption scale only accepts the three sizes", () => {
   assert.equal(parseCaptionScale("2"), 1);
   assert.equal(captionScaleLabel(1.45), "Large");
   assert.equal(captionScaleLabel(1), "Small");
+});
+
+test("the file the audio agrees with beats the one that sorts first", () => {
+  const files = [cue("en", "https://x/a.srt"), cue("en", "https://x/b.srt"), cue("en", "https://x/c.srt")];
+  const fits = {
+    [files[0].id]: { id: files[0].id, shift: 0, r: 0.1, matched: false },
+    [files[1].id]: { id: files[1].id, shift: 4.95, r: 0.31, matched: true },
+    [files[2].id]: { id: files[2].id, shift: -0.1, r: 0.25, matched: true },
+  };
+  assert.equal(pickSubLang(files, "ja", undefined, fits), files[1].id);
+  // A saved language is not a saved file; a saved file is.
+  assert.equal(pickSubLang(files, "ja", "en", fits), files[1].id);
+  assert.equal(pickSubLang(files, "ja", files[2].id, fits), files[2].id);
+  // Nothing measured, or nothing matched: the old order.
+  assert.equal(pickSubLang(files, "ja"), files[0].id);
+  assert.equal(pickSubLang(files, "ja", undefined, { [files[0].id]: fits[files[0].id] }), files[0].id);
+});
+
+test("an offset inside the method's error is left alone, and an unmatched file is never moved", () => {
+  assert.equal(appliedShift({ id: "a", shift: 21.3, r: 0.36, matched: true }), 21.3);
+  assert.equal(appliedShift({ id: "a", shift: 0.35, r: 0.36, matched: true }), 0);
+  assert.equal(appliedShift({ id: "a", shift: 21.3, r: 0.1, matched: false }), 0);
+  assert.equal(appliedShift(undefined), 0);
 });

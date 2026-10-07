@@ -10,6 +10,10 @@ export type SourceInfo = {
   kind: MediaKind;
   /** Suwayomi always ships a built-in local-files source; it is not a remote source. */
   isLocal: boolean;
+  /** Stremio only: types the addon declared. Absent means undeclared or not looked up yet, so it counts as serving any. */
+  types?: string[];
+  /** Stremio only: false once its manifest is known to have no `stream` resource (catalog- or subtitle-only). */
+  streams?: boolean;
 };
 
 export type SourceManga = {
@@ -29,7 +33,10 @@ export type SourceChapter = {
   scanlator: string | null;
   uploadDate: number | null;
   pageCount: number | null;
-  /** Anime only. 0 is specials; missing means a flat chapter list. */
+  /**
+   * Video only. 0 is specials; missing means a flat chapter list. `number` is the
+   * episode within its season; the absolute unit is the 1-based position in the list.
+   */
   season?: number | null;
   thumbnailUrl?: string | null;
   overview?: string | null;
@@ -64,7 +71,8 @@ export type SourceBackend = {
   kind: MediaKind;
 
   listSources(): Promise<Result<SourceInfo[]>>;
-  search(sourceId: string, query: string): Promise<Result<SourceManga[]>>;
+  /** `kind` narrows what a shared pool is asked for (a Stremio addon serves movies, series and anime alike). */
+  search(sourceId: string, query: string, kind?: MediaKind): Promise<Result<SourceManga[]>>;
   chapters(mangaId: string, refresh?: boolean): Promise<Result<SourceChapter[]>>;
   pages(
     chapterId: string,

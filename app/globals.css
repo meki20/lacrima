@@ -12,6 +12,8 @@ body:has(.sidebar) { padding-left: var(--nav); }
   display: flex; flex-direction: column; gap: 36px;
   padding: 22px 16px;
   background: linear-gradient(to top, #630e19 0%, #050403 10%);
+  /* Seven categories plus the secondary entries outgrow a short window. */
+  overflow-y: auto; scrollbar-width: none;
 }
 .sidebar .brand { justify-content: center; }
 .sidebar .brand img { width: 188px; height: 188px; }
@@ -47,6 +49,8 @@ body:has(.sidebar) { padding-left: var(--nav); }
 .settings-link { display: grid; place-items: center; color: var(--tx3); background: none; border: 0; padding: 0; cursor: pointer; }
 .settings-link:hover { color: var(--tx); }
 .settings-link svg { width: 18px; height: 18px; }
+.topbar .pfp { position: relative; }
+.topbar .pfp::after { content: ""; position: absolute; inset: -6px; }
 
 .hero {
   position: relative;
@@ -142,7 +146,7 @@ main { padding: 28px var(--pad) 60px; display: flex; flex-direction: column; gap
 .providers-card { max-width: 100%; }
 .update-card { max-width: 100%; display: flex; flex-direction: column; gap: 14px; }
 .update-card h2 span { color: var(--tx3); font-family: var(--ff-mono); font-size: 11px; font-weight: 400; letter-spacing: .04em; text-transform: uppercase; }
-.update-repo { width: fit-content; color: var(--accent); font-size: 13px; }
+.update-repo { width: fit-content; color: var(--accent-fg); font-size: 13px; }
 .update-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .update-actions .btn:disabled { cursor: not-allowed; opacity: .6; }
 .update-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); }
@@ -159,9 +163,30 @@ main { padding: 28px var(--pad) 60px; display: flex; flex-direction: column; gap
 .provider-list i { width: 8px; height: 8px; border-radius: 50%; }
 .provider-list b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
 .provider-list span { color: var(--tx3); font-family: var(--ff-mono); font-size: 10px; }
+/* settings: categories (switch rows) */
+.kinds-card { grid-column: 1 / -1; }
+.kinds-card label { padding: 7px 0; cursor: pointer; }
+.kinds-card label:has(input:disabled) { cursor: default; }
+.kind-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.kind-text b { color: var(--tx); font-weight: 400; }
+.kind-text small { color: var(--tx3); font-size: 12px; }
+.kinds-card input[role="switch"] { appearance: none; position: relative; flex: none; width: 34px; height: 20px; margin: 0; border-radius: 999px; background: var(--s3); cursor: inherit; transition: background .15s; }
+.kinds-card input[role="switch"]::before { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--tx3); transition: transform .15s, background .15s; }
+.kinds-card input[role="switch"]:checked { background: var(--accent); }
+.kinds-card input[role="switch"]:checked::before { transform: translateX(14px); background: var(--tx); }
+.kinds-card input[role="switch"]:focus-visible { outline: 2px solid var(--highlight); outline-offset: 2px; }
+.kinds-card input[role="switch"]:disabled { opacity: .5; }
+.kinds-note { margin: 0; color: var(--tx3); font-size: 12px; }
+.kinds-note:not(:empty) { margin-top: 12px; }
+.kinds-note.err { color: var(--danger); }
+@media (prefers-reduced-motion: reduce) {
+  .kinds-card input[role="switch"], .kinds-card input[role="switch"]::before { transition: none; }
+}
 
 .tab:focus-visible,
+.btn:focus-visible,
 .chip:focus-visible,
+a.poster:focus-visible,
 .cont-card:focus-visible {
   outline: 2px solid var(--highlight);
   outline-offset: 2px;
@@ -183,6 +208,19 @@ main { padding: 28px var(--pad) 60px; display: flex; flex-direction: column; gap
 .arrow.right { right: 0; background: linear-gradient(270deg, var(--canvas) 30%, transparent); }
 .arrow.left { left: 0; }
 .rail-wrap:hover .arrow, .arrow:focus-visible { opacity: 1; }
+/* An arrow with nowhere to go is not offered (Rail sets disabled at either end). */
+.rail-wrap .arrow:disabled { opacity: 0; pointer-events: none; }
+
+/* Rail is a <ul>: reset it. The 4px bleed keeps the focus ring from being clipped by
+   the scroller. The fade marks only the sides that can still scroll (data-fade), and
+   scroll-padding keeps a keyboard-focused poster out from under it. */
+.rail-wrap .rail {
+  margin: -4px; padding: 4px; list-style: none;
+  scroll-padding-inline: 56px;
+}
+.rail[data-fade="start"] { mask-image: linear-gradient(90deg, transparent, #000 56px); }
+.rail[data-fade="end"] { mask-image: linear-gradient(270deg, transparent, #000 56px); }
+.rail[data-fade="both"] { mask-image: linear-gradient(90deg, transparent, #000 56px, #000 calc(100% - 56px), transparent); }
 
 /* Rows read as one texture until you point at something. */
 .rail .poster {
@@ -209,14 +247,102 @@ main { padding: 28px var(--pad) 60px; display: flex; flex-direction: column; gap
 }
 .poster .cap, .poster .new-pip { z-index: 2; }
 
+/* Cover fade-in (PosterImg). Transparent only until decoded; "failed" hides it so the
+   placeholder shows, and without scripting nothing would ever flip it, so show it. */
+.pimg { opacity: 0; transition: opacity 200ms ease-out, transform 180ms ease-out; }
+.pimg[data-state="on"] { opacity: 1; }
+.pimg[data-state="failed"] { display: none; }
+@media (scripting: none) { .pimg { opacity: 1; } }
+
+/* The caption lives in .foot so the hover preview can stack above it without moving it.
+   .foot is out of flow: nothing in here can change the card's box. */
+.poster .foot {
+  position: absolute; inset: auto 0 0; z-index: 2; isolation: isolate;
+  display: flex; flex-direction: column; gap: 6px; padding: 10px;
+}
+.poster .foot .cap {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden; overflow-wrap: anywhere;
+}
+.poster .pv { display: none; }
+
+/* No cover: a muted tile with the title set in it, not a colour slab. */
+.poster.nocover {
+  align-items: center; justify-content: center; padding: 14px;
+  background: var(--s2); text-align: center;
+}
+.poster.nocover::after { display: none; }
+.poster.nocover .foot { display: contents; }
+.poster.nocover .cap {
+  position: relative; z-index: 1;
+  max-width: 100%; color: var(--tx2); text-shadow: none;
+  font-size: 13px; line-height: 1.35; letter-spacing: -0.01em;
+}
+
+/* Hover/focus preview: fine pointers only. Touch gets the plain card. */
+@media (hover: hover) and (pointer: fine) {
+  .poster .foot::before {
+    content: ""; position: absolute; z-index: -1; inset: -40px 0 0;
+    background: linear-gradient(0deg, rgba(0,0,0,.92) 55%, transparent);
+    opacity: 0; transition: opacity 160ms ease-out;
+  }
+  .poster .pv {
+    display: flex; flex-direction: column; gap: 2px;
+    font-weight: 400; font-size: 11px; line-height: 1.35; color: var(--tx2);
+    opacity: 0; transition: opacity 160ms ease-out;
+  }
+  .poster .pv > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .poster .pv-stats {
+    color: var(--tx); font-family: var(--ff-mono); font-size: 10px;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .poster:is(:hover, :focus-visible, .sel) .pv,
+  .poster:is(:hover, :focus-visible, .sel) .foot::before { opacity: 1; }
+  .poster:is(:hover, :focus-visible, .sel) .pimg { transform: scale(1.03); }
+
+  /* Nothing to darken behind a tile: the preview sits on its own surface. */
+  .poster.nocover .foot::before { display: none; }
+  .poster.nocover .pv {
+    position: absolute; inset: auto 0 0; z-index: 2; padding: 22px 10px 10px;
+    background: linear-gradient(0deg, var(--s2) 60%, transparent);
+    text-align: left;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pimg, .poster .pv, .poster .foot::before { transition: none; }
+  .poster:is(:hover, :focus-visible, .sel) .pimg { transform: none; }
+}
+
 .srcchip {
   display: flex; align-items: center; gap: 10px;
   font-size: 13px; color: var(--tx2);
 }
 .srcchip b { color: var(--tx); font-weight: 500; }
-.srcchip a { color: var(--accent); font-size: 12px; }
+.srcchip a { color: var(--accent-fg); font-size: 12px; }
 
 .rows { display: flex; flex-direction: column; gap: 8px; }
+
+/* A source's vet score and the icon that vets it again. Neutral until it has something to say. */
+.vet-wrap { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.vet {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--ff-mono); font-size: 11px; color: var(--tx2);
+  font-variant-numeric: tabular-nums;
+}
+.vet i { width: 6px; height: 6px; border-radius: 50%; background: var(--tx3); }
+.vet.good i { background: var(--ok); }
+.vet.mid i { background: var(--warn); }
+.vet.bad i { background: var(--danger); }
+.vet-retry {
+  display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: var(--r-ctl); background: transparent; color: var(--tx3);
+  cursor: pointer; transition: background-color 120ms ease, color 120ms ease;
+}
+.vet-retry:hover:not(:disabled) { background: var(--s2); color: var(--tx); }
+.vet-retry:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 1px; }
+.vet-retry:disabled { cursor: default; }
+.vet-retry svg.spinning { animation: spin 900ms linear infinite; }
+@media (prefers-reduced-motion: reduce) { .vet-retry { transition: none; } .vet-retry svg.spinning { animation-duration: 2.4s; } }
 a.row:hover { background: var(--s2); }
 .row {
   display: flex; align-items: center; gap: 12px;
@@ -342,6 +468,10 @@ input:focus-visible { outline: none; border-color: var(--highlight); }
 }
 button.chip { background: transparent; cursor: pointer; font: inherit; }
 .chip.on { background: var(--tx); color: var(--canvas); border-color: var(--tx); }
+.chip { transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease, opacity 120ms ease; }
+.chip:not(.on):hover { background: var(--s2); color: var(--tx); border-color: color-mix(in srgb, var(--tx) 14%, transparent); }
+.chip:active { transform: translateY(1px); }
+@media (prefers-reduced-motion: reduce) { .chip { transition: none; } .chip:active { transform: none; } }
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(198px, 1fr));
@@ -459,7 +589,7 @@ input.search::placeholder { color: var(--tx3); }
   font-size: 12px; cursor: pointer; white-space: nowrap;
 }
 .rbtn:hover { background: rgba(255,255,255,.12); }
-.rbtn.on { border-color: var(--accent); color: var(--accent); }
+.rbtn.on { border-color: var(--accent); color: var(--accent-fg); }
 .rbtn[aria-disabled="true"] { opacity: .35; pointer-events: none; }
 
 .reader-stage {
@@ -557,7 +687,7 @@ input.search::placeholder { color: var(--tx3); }
 .reader a.pbtn:hover { opacity: 0.72; background: transparent; }
 .reader .pbtn:focus-visible,
 .reader a.pbtn:focus-visible { outline: 2px solid var(--highlight); outline-offset: 3px; }
-.reader .pbtn.on { color: var(--accent); opacity: 1; }
+.reader .pbtn.on { color: var(--accent-fg); opacity: 1; }
 .reader .pbtn[aria-disabled="true"],
 .reader a.pbtn[aria-disabled="true"] { opacity: .28; pointer-events: none; }
 
@@ -581,7 +711,7 @@ input.search::placeholder { color: var(--tx3); }
 }
 .reader-slit-fill {
   position: absolute; inset: 0;
-  background: var(--accent);
+  background: var(--accent-fg);
   transform: scaleX(var(--t, 0));
   transform-origin: left center;
   transition: transform 220ms ease;
@@ -634,7 +764,7 @@ input.search::placeholder { color: var(--tx3); }
 .reader-opt svg { width: 22px; height: 22px; display: block; }
 .reader-opt span { font-size: 11px; line-height: 1.2; color: inherit; }
 .reader-opt:hover { color: var(--tx); background: rgba(255,255,255,.06); }
-.reader-opt.on { color: var(--accent); background: var(--accent-dim); }
+.reader-opt.on { color: var(--accent-fg); background: var(--accent-dim); }
 .reader-opt:focus-visible { outline: 2px solid var(--highlight); outline-offset: 2px; }
 .reader-chapters-box { flex: 1 1 auto; min-height: 0; }
 .reader-chapters {
@@ -658,7 +788,7 @@ input.search::placeholder { color: var(--tx3); }
 .row.read:hover { opacity: 0.72; }
 .reader-chapters a.read { opacity: 0.42; }
 .reader-chapters a.read:hover { opacity: 0.72; }
-.reader-chapters a.on { color: var(--accent); background: var(--accent-dim); opacity: 1; }
+.reader-chapters a.on { color: var(--accent-fg); background: var(--accent-dim); opacity: 1; }
 .reader-catch {
   position: absolute; inset: 0 var(--drawer) calc(4px + env(safe-area-inset-bottom)) 0; z-index: 4;
   border: 0; padding: 0; background: transparent; cursor: default;
@@ -679,7 +809,7 @@ input.search::placeholder { color: var(--tx3); }
 
 /* Desktop: hide the cursor with the chrome (Vidstack base theme does the same). */
 @media (hover: hover) and (pointer: fine) {
-  .player-root[data-started]:not([data-controls]):not(:has(.player-lang-menu)) {
+  .player-root[data-started]:not([data-controls]):not(:has(.player-lang-menu, .player-cast-menu)) {
     cursor: none;
   }
 }
@@ -692,6 +822,7 @@ input.search::placeholder { color: var(--tx3); }
 .player-controls .reader-bar.bottom { transform: translateY(6px); }
 .player-controls[data-visible] .reader-bar,
 .player-controls:has(.player-lang-menu) .reader-bar,
+.player-controls:has(.player-cast-menu) .reader-bar,
 /* Nothing is playing yet, so there is nothing to get out of the way of — and the
    back link has to stay reachable while a stream is still being resolved. */
 .player-root:not([data-can-play]) .player-controls .reader-bar {
@@ -711,7 +842,7 @@ input.search::placeholder { color: var(--tx3); }
 }
 .spin {
   width: 26px; height: 26px; border-radius: 50%;
-  border: 2px solid var(--border-strong); border-top-color: var(--accent);
+  border: 2px solid var(--border-strong); border-top-color: var(--accent-fg);
   animation: spin 700ms linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -781,11 +912,11 @@ input.search::placeholder { color: var(--tx3); }
   position: absolute; left: 0; top: 0; height: 100%; border-radius: 1px;
 }
 .player-root .scrub-buf { width: var(--slider-progress, 0%); background: rgba(255,255,255,.42); }
-.player-root .scrub-fill { width: var(--slider-fill, 0%); background: var(--accent); }
+.player-root .scrub-fill { width: var(--slider-fill, 0%); background: var(--accent-fg); }
 .player-root .scrub-thumb {
   position: absolute; top: 50%; left: var(--slider-fill, 0%);
   width: 16px; height: 16px; margin-left: -8px;
-  border-radius: 50%; background: var(--accent);
+  border-radius: 50%; background: var(--accent-fg);
   box-shadow: 0 0 0 1px rgba(0,0,0,.35);
   transform: translateY(-50%) scale(0);
   transition: transform 120ms ease, opacity 120ms ease;
@@ -872,6 +1003,29 @@ input.search::placeholder { color: var(--tx3); }
 }
 
 .player-lang { position: relative; }
+.player-cast { position: relative; }
+.player-cast-menu {
+  position: absolute; right: 0; bottom: calc(100% + 10px);
+  width: min(300px, 80vw); padding: 14px;
+  display: grid; gap: 9px;
+  background: rgba(17,17,17,.96); border-radius: var(--r-card);
+  box-shadow: 0 8px 32px rgba(0,0,0,.55); z-index: 8;
+  color: var(--tx); font-size: 13px; pointer-events: auto;
+}
+.player-cast-menu strong { font-size: 15px; font-weight: 500; }
+.player-cast-menu label, .player-cast-menu p { color: var(--tx2); margin: 0; line-height: 1.4; }
+.player-cast-menu input {
+  width: 100%; padding: 8px; border: 1px solid var(--border);
+  border-radius: var(--r-ctl); background: var(--s2); color: var(--tx);
+}
+.player-cast-menu button {
+  min-height: 36px; border: 0; border-radius: var(--r-ctl);
+  background: var(--accent); color: white; cursor: pointer;
+}
+.player-casting {
+  position: absolute; inset: 0; z-index: 2; display: grid; place-items: center;
+  background: #000; color: var(--tx2); font-size: 18px;
+}
 .player-lang .pbtn {
   max-width: 180px; padding: 0 8px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -907,7 +1061,7 @@ input.search::placeholder { color: var(--tx3); }
   font-size: 15px;
 }
 .player-lang-menu ul button:hover { background: rgba(255,255,255,.08); }
-.player-lang-menu ul button.on { color: var(--accent); background: var(--accent-dim); }
+.player-lang-menu ul button.on { color: var(--accent-fg); background: var(--accent-dim); }
 .player-ep-menu { min-width: 280px; max-width: min(360px, 80vw); }
 .player-ep-menu ul { max-height: min(320px, 46vh); }
 .player-ep-season {
@@ -924,7 +1078,7 @@ input.search::placeholder { color: var(--tx3); }
 }
 .player-ep-menu ul a .mono { color: var(--tx3); flex-shrink: 0; }
 .player-ep-menu ul a:hover { background: rgba(255,255,255,.08); }
-.player-ep-menu ul a.on { color: var(--accent); background: var(--accent-dim); }
+.player-ep-menu ul a.on { color: var(--accent-fg); background: var(--accent-dim); }
 .player-lang-note {
   padding: 10px 12px;
   color: var(--tx3); font-size: 13px; line-height: 1.35;
@@ -932,7 +1086,7 @@ input.search::placeholder { color: var(--tx3); }
 .player-lang-note button {
   margin-left: 4px; padding: 2px 8px;
   border: 1px solid var(--border); border-radius: 999px;
-  background: transparent; color: var(--accent);
+  background: transparent; color: var(--accent-fg);
   font: inherit; font-size: 11px; cursor: pointer;
 }
 .player-sub-sync {
@@ -952,7 +1106,7 @@ input.search::placeholder { color: var(--tx3); }
   font-variant-numeric: tabular-nums;
 }
 .player-sub-sync:not([data-zero]) .player-sub-sync-row output {
-  color: var(--accent);
+  color: var(--accent-fg);
 }
 .player-sub-sync-scrub {
   position: relative; height: 24px;
@@ -973,7 +1127,7 @@ input.search::placeholder { color: var(--tx3); }
   position: absolute; top: 50%; height: 3px; margin-top: -1.5px;
   left: calc(8px + (min(0, var(--sync, 0)) + 10) / 20 * (100% - 16px));
   width: calc(abs(var(--sync, 0)) / 20 * (100% - 16px));
-  border-radius: 1px; background: var(--accent);
+  border-radius: 1px; background: var(--accent-fg);
 }
 .player-sub-sync-thumb {
   position: absolute; top: 50%;
@@ -1067,9 +1221,11 @@ input.search::placeholder { color: var(--tx3); }
     backdrop-filter: blur(12px);
     border-top: 1px solid var(--border);
   }
+  /* Seven tabs share the bar equally rather than padding each one out: 375px gives
+     ~52px a tab, enough for the longest label ("Movies") with a 40px+ touch target. */
   .bottomnav .tab {
-    display: flex; flex-direction: column; align-items: center; gap: 2px;
-    padding: 8px 10px; font-size: 11px;
+    display: flex; flex: 1 1 0; min-width: 0; flex-direction: column; align-items: center; gap: 2px;
+    padding: 8px 2px; font-size: 11px; white-space: nowrap;
   }
   main { padding-bottom: 84px; }
   /* Phone: one page scroll — nested overflow traps swipe at the edges. */
@@ -1081,6 +1237,10 @@ input.search::placeholder { color: var(--tx3); }
   }
   .settings-form { grid-template-columns: 1fr; }
   .update-controls { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 360px) {
+  .bottomnav .tab { font-size: 10px; }
 }
 
 @media (orientation: landscape) and (max-height: 500px) {
@@ -1099,8 +1259,14 @@ input.search::placeholder { color: var(--tx3); }
   }
   .rail { grid-auto-columns: 156px; }
   .shelf { grid-template-columns: repeat(auto-fill, 156px); }
-  .search { width: 150px; }
+  /* Topbar at phone width: search takes what the fixed items leave. Health and the
+     sticker button get 40px hit boxes (the dot and icon stay as drawn). */
+  .topbar { gap: 8px; }
+  .topbar .spacer { display: none; }
+  .topbar .search { flex: 1; width: auto; min-width: 0; }
+  .health { min-width: 40px; min-height: 40px; justify-content: center; }
   .health span:last-child { display: none; }
+  .settings-link { width: 40px; height: 40px; }
   main { gap: 26px; }
 
   /* Keep every viewer control reachable instead of letting the dock overflow. */
@@ -1443,7 +1609,7 @@ html.sticker-carrying .sticker-carry-bar * { cursor: pointer !important; }
   height: 36px; padding: 0 12px; border: 0; border-radius: var(--r-ctl);
   background: transparent; color: var(--tx); text-align: left; cursor: pointer; font: inherit;
 }
-.lib-menu-pop button:hover, .lib-menu-pop button.on { background: var(--accent-dim); color: var(--accent); }
+.lib-menu-pop button:hover, .lib-menu-pop button.on { background: var(--accent-dim); color: var(--accent-fg); }
 
 .row-main {
   flex: 1; min-width: 0;
@@ -1467,7 +1633,7 @@ html.sticker-carrying .sticker-carry-bar * { cursor: pointer !important; }
 .reader-chapter a { flex: 1; min-width: 0; }
 .reader-chapter.read { opacity: 0.42; }
 .reader-chapter.read:hover { opacity: 0.72; }
-.reader-chapter.on, .reader-chapter.on a { color: var(--accent); }
+.reader-chapter.on, .reader-chapter.on a { color: var(--accent-fg); }
 .reader-chapter.on { background: var(--accent-dim); opacity: 1; border-radius: var(--r-ctl); }
 
 .sticker-carry-bar {

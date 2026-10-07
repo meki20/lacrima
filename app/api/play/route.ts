@@ -1,5 +1,6 @@
-import { parseLang } from "@/lib/audio";
-import type { MediaKind, ProviderSlug } from "@/lib/media";
+import { nativeLang, parseLang } from "@/lib/audio";
+import { isVideoKind, parseKind } from "@/lib/kinds";
+import { isProviderSlug } from "@/lib/media";
 import {
   fastPlaylist,
   getCachedPick,
@@ -18,12 +19,13 @@ export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   const u = new URL(req.url);
-  const kind = u.searchParams.get("kind") as MediaKind | null;
+  const kind = parseKind(u.searchParams.get("kind"));
   const chapterId = u.searchParams.get("chapterId");
-  const via = u.searchParams.get("via") ?? undefined;
+  const rawVia = u.searchParams.get("via");
+  const via = isProviderSlug(rawVia) ? rawVia : undefined;
   const mediaId = Number(u.searchParams.get("mediaId"));
   if (!kind || !chapterId) {
-    return Response.json({ error: "Missing kind or chapterId" }, { status: 400 });
+    return Response.json({ error: "Missing or unknown kind, or missing chapterId" }, { status: 400 });
   }
   const lang = parseLang(u.searchParams.get("lang") ?? u.searchParams.get("audio"));
   const extras = {
@@ -31,15 +33,15 @@ export async function GET(req: Request) {
     mediaId: Number.isFinite(mediaId) ? mediaId : undefined,
     lang,
   };
-  if (kind === "anime") {
+  if (isVideoKind(kind)) {
     const fresh = u.searchParams.get("fresh") === "1";
     const ctx: CacheCtx | null =
       via && Number.isFinite(extras.mediaId)
-        ? { via: via as ProviderSlug, mediaId: extras.mediaId!, chapterId }
+        ? { via, mediaId: extras.mediaId!, chapterId }
         : null;
     /* Removing an addon has to take effect on the next play. The saved playlist
        never expires, so without this its picks outlive the source they came from. */
-    const sources = await backend("anime").listSources();
+    const sources = await backend(kind).listSources();
     const installed = sources.ok ? new Set(sources.value.map((s) => s.name)) : null;
     const cachedPick = ctx && !fresh ? getCachedPick(ctx.via, ctx.mediaId, chapterId, lang) : null;
     const pick = cachedPick && (!installed || installed.has(cachedPick.provider)) ? cachedPick : null;
@@ -56,10 +58,12 @@ export async function GET(req: Request) {
     /* Memoised and already warm from the page render. The resolver needs it to
        tell this show apart from its spin-offs and its live-action remake, which
        addons happily return under the same id. */
-    const meta = ctx ? await fetchTitle(ctx.via, "anime", ctx.mediaId) : null;
+    const meta = ctx ? await fetchTitle(ctx.via, kind, ctx.mediaId) : null;
     const r = await resolveStreams(chapterId, {
       ...extras,
+      kind,
       title: meta?.ok ? meta.value.title : undefined,
+      native: nativeLang(kind, meta?.ok ? meta.value.language : undefined),
       fresh,
     });
     if (!r.ok) {

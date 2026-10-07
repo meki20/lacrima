@@ -115,6 +115,7 @@ async function get(
 export const kitsu: Provider = {
   slug: "kitsu",
   name: "Kitsu",
+  kinds: ["anime", "manga", "novel"],
 
   async fetchTitle(kind, id) {
     try {
@@ -186,6 +187,8 @@ export const kitsu: Provider = {
         anime: anime.value.items,
         manga: manga.value.items,
         novels: novels.value.items,
+        movies: [],
+        series: [],
       });
     } catch (e) {
       return Err(e instanceof Error ? e.message : "Could not reach Kitsu.");

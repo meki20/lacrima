@@ -6,10 +6,11 @@ import {
   continueRatio,
   heroAction,
   pickContinue,
+  quietAnchor,
   toContinueItem,
   unitPip,
 } from "./progress.ts";
-import { heldUnit, holdStickerToasts, isChapterRead, keepsResumeAnchor, skipWatchSeconds, spanWatchSeconds, usesSeriesTree } from "./progress-write.ts";
+import { chapterAnchor, defaultRuntimeSeconds, heldUnit, holdStickerToasts, isChapterRead, keepsResumeAnchor, skipWatchSeconds, spanWatchSeconds, usesSeriesTree } from "./progress-write.ts";
 
 const row = (over: Partial<ProgressRow> & { title: string; media_id: number }): ProgressRow => ({
   profile_id: 1,
@@ -281,4 +282,83 @@ test("heroAction continues a show already in progress, including another season 
     [watching],
   );
   assert.equal(otherProvider.primary.label, "Details");
+});
+
+test("movies and series are video: seconds anchors, their own pips and labels", () => {
+  assert.equal(unitPip("movie", 1), "Movie");
+  assert.equal(unitPip("series", 5, 2, 3), "S2·E3");
+  assert.equal(unitPip("series", 12, 0), "Ep. 12");
+  assert.deepEqual(quietAnchor("movie"), { kind: "seconds", at: 0, chapterId: "-", chapterName: "" });
+  assert.deepEqual(quietAnchor("series"), quietAnchor("anime"));
+  assert.equal(quietAnchor("manga").kind, "page");
+  const write = {
+    via: "cinemeta" as const, mediaId: 903747, kind: "series" as const, title: "Breaking Bad", cover: null,
+    unit: 14, chapterId: "imdb::tt0903747:2:1", chapterName: "Seven Thirty-Seven", season: 2, episode: 1, durationSeconds: 2820,
+  };
+  assert.deepEqual(chapterAnchor(write), {
+    kind: "seconds", at: 0, chapterId: "imdb::tt0903747:2:1", chapterName: "Seven Thirty-Seven", duration: 2820, season: 2, episode: 1,
+  });
+  assert.equal(chapterAnchor({ ...write, kind: "movie", season: undefined, episode: 1 }).kind, "seconds");
+  assert.equal(defaultRuntimeSeconds("anime"), 1440);
+  assert.ok(defaultRuntimeSeconds("movie") > defaultRuntimeSeconds("series"));
+  assert.equal(defaultRuntimeSeconds("manga"), 0);
+  assert.equal(holdStickerToasts("/read/cinemeta/movie/111161/imdb%3A%3Att0111161"), true);
+  assert.equal(holdStickerToasts("/read/cinemeta/series/903747/x"), true);
+});
+
+test("a movie's continue card keeps its full name and says how much is left", () => {
+  const item = toContinueItem(
+    row({
+      media_id: 111161,
+      via: "cinemeta",
+      media_type: "movie",
+      title: "Dune: Part Two (2024)",
+      unit: 1,
+      anchor: JSON.stringify({ kind: "seconds", at: 3600, chapterId: "imdb::tt15239678", chapterName: "Movie", duration: 9960 }),
+    }),
+  );
+  assert.equal(item.title, "Dune: Part Two (2024)");
+  assert.equal(item.pip, "Movie");
+  assert.equal(item.unitLabel, "movie");
+  assert.equal(item.detail, "106 min left");
+  assert.equal(item.href, "/read/cinemeta/movie/111161/imdb%3A%3Att15239678");
+});
+
+test("pickContinue never folds movies or series into one another", () => {
+  const movie = (id: number, title: string, updated_at: number) =>
+    row({ media_id: id, via: "cinemeta", media_type: "movie", title, updated_at });
+  const out = pickContinue(
+    [
+      movie(1, "Dune", 5),
+      movie(2, "Dune: Part Two", 4),
+      movie(3, "Joker (2019)", 3),
+      row({ media_id: 4, via: "cinemeta", media_type: "series", title: "The Bear Season 2", updated_at: 2 }),
+      row({ media_id: 5, via: "cinemeta", media_type: "series", title: "The Bear", updated_at: 1 }),
+      movie(1, "Dune", 0),
+    ],
+    10,
+  );
+  assert.deepEqual(
+    out.map((i) => `${i.id}:${i.title}`),
+    ["1:Dune", "2:Dune: Part Two", "3:Joker (2019)", "4:The Bear Season 2", "5:The Bear"],
+  );
+  assert.equal(pickContinue([movie(1, "A", 3), movie(2, "B", 2), movie(3, "C", 1)], 2).length, 2);
+});
+
+test("heroAction on a film or series matches that title only", () => {
+  const watching = toContinueItem(
+    row({
+      media_id: 2,
+      via: "cinemeta",
+      media_type: "series",
+      title: "The Bear Season 2",
+      anchor: JSON.stringify({ kind: "seconds", at: 10, chapterId: "e", chapterName: "E" }),
+    }),
+  );
+  const same = heroAction({ via: "cinemeta", kind: "series", id: 2, title: "The Bear Season 2" }, [watching]);
+  assert.equal(same.primary.label, "Continue");
+  assert.equal(same.primary.href, watching.href);
+  const sibling = heroAction({ via: "cinemeta", kind: "series", id: 3, title: "The Bear" }, [watching]);
+  assert.equal(sibling.primary.label, "Details");
+  assert.equal(sibling.primary.href, "/title/cinemeta/series/3");
 });

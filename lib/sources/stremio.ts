@@ -14,6 +14,8 @@ import {
   type Playlist,
 } from "../streams.ts";
 import { normalize } from "../match.ts";
+import type { MediaKind } from "../media.ts";
+import { fetchSeriesEpisodes } from "../providers/cinemeta.ts";
 import { Err, Ok, type Result } from "../result.ts";
 import type { Extension, Repo, SourceBackend, SourceChapter, SourceInfo, SourceManga } from "./types.ts";
 import {
@@ -379,9 +381,9 @@ function split(id: string): [string, string] {
   return i < 0 ? ["", id] : [id.slice(0, i), id.slice(i + 2)];
 }
 
-async function manifest(indexUrl: string): Promise<Result<Manifest>> {
+async function manifest(indexUrl: string, ms?: number): Promise<Result<Manifest>> {
   try {
-    const res = await get(indexUrl);
+    const res = await get(indexUrl, ms);
     if (!res.ok) return Err(`Addon returned ${res.status}.`);
     const json: unknown = await res.json();
     if (looksLikeAniyomi(json)) {
@@ -427,8 +429,25 @@ function subtitleResource(m: Manifest) {
   return namedResource(m, "subtitles");
 }
 
-function declaredTypes(m: Manifest): string[] | undefined {
+function declaredTypes(m: Pick<Manifest, "types" | "resources">): string[] | undefined {
   return streamResource(m)?.types ?? m.types;
+}
+
+/** The Stremio resource type a live-action kind is asked under. Anime is deliberately absent: it probes all three. */
+const TYPE_OF = { movie: "movie", series: "series" } as const;
+
+const liveType = (kind?: MediaKind) => (kind === "movie" || kind === "series" ? TYPE_OF[kind] : null);
+
+/**
+ * Whether an addon is worth asking about `kind`. One that declares no types is
+ * asked for everything, as it always was; one that declares types must name the
+ * type we need (movie -> "movie", series -> "series"). Anime is never narrowed —
+ * its addons mix `anime`, `series` and `movie` — so nothing changes for it.
+ */
+export function servesKind(m: Pick<Manifest, "types" | "resources">, kind: MediaKind): boolean {
+  const want = liveType(kind);
+  const types = declaredTypes(m);
+  return !want || !types?.length || types.includes(want);
 }
 
 /** Cinemeta ships catalog + meta and no streams; asking it for one is a guaranteed 404. */
@@ -489,18 +508,70 @@ export function subtitleTypesFor(m: Manifest, id: string): string[] {
 // ponytail: process-lifetime manifest cache, no TTL — restart picks up changes.
 const manifests = new Map<string, Manifest>();
 
+/**
+ * A healthy manifest answers in a few hundred milliseconds, so this is the budget.
+ *
+ * A resolve awaits every manifest before it asks any addon for a stream. With the
+ * default 12s timeout and failures never remembered, one hung addon (PenguPlay)
+ * added twelve seconds to *every* play, which is the whole of why Shawshank took
+ * 12.6s to find streams that Meteor and TorrentsDB had answered with in 0.4s.
+ */
+const MANIFEST_MS = 4_000;
+const manifestFailedAt = new Map<string, number>();
+
+async function loadManifest(url: string): Promise<Manifest | null> {
+  const r = await manifest(url, MANIFEST_MS);
+  if (!r.ok) {
+    manifestFailedAt.set(url, Date.now());
+    return null;
+  }
+  manifestFailedAt.delete(url);
+  manifests.set(url, r.value);
+  return r.value;
+}
+
 async function manifestCached(url: string): Promise<Manifest | null> {
   const hit = manifests.get(url);
   if (hit) return hit;
-  const r = await manifest(url);
-  if (!r.ok) return null;
-  manifests.set(url, r.value);
-  return r.value;
+  const failed = manifestFailedAt.get(url);
+  if (failed === undefined) return loadManifest(url);
+  /* A dead addon is skipped outright, and once its window passes it is retried in the
+     background — never in front of a play, or the dead one costs the budget every 5 min. */
+  if (Date.now() - failed > PEEK_RETRY_MS) {
+    manifestFailedAt.set(url, Date.now());
+    void loadManifest(url);
+  }
+  return null;
+}
+
+/**
+ * A listing must never wait on an addon, so this reads the cache only. A miss starts
+ * a fetch for the next listing and reads as "unknown" (which counts as serving any
+ * kind) until it lands. Tried at most once per window so a dead addon is not re-asked
+ * on every page view.
+ */
+const PEEK_RETRY_MS = 5 * 60_000;
+const peeked = new Map<string, number>();
+
+function peekManifest(url: string | null): Manifest | null {
+  if (!url) return null;
+  const hit = manifests.get(url);
+  if (hit) return hit;
+  if (Date.now() - (peeked.get(url) ?? 0) > PEEK_RETRY_MS) {
+    peeked.set(url, Date.now());
+    void manifestCached(url);
+  }
+  return null;
 }
 
 function isAnimeAddon(m: Manifest): boolean {
   const types = m.types ?? [];
   return types.includes("anime") || /anime/i.test(`${m.name ?? ""} ${m.id ?? ""}`);
+}
+
+/** Movie and series addons share the pool with anime ones; the anime test above is unchanged. */
+function isVideoAddon(m: Manifest): boolean {
+  return (m.types ?? []).some((t) => t === "movie" || t === "series");
 }
 
 function isSubtitleAddon(m: Manifest): boolean {
@@ -541,7 +612,7 @@ async function pullRepo(indexUrl: string, man: Manifest): Promise<Result<number>
       const m = a.manifest;
       const transport = a.transportUrl;
       if (!m?.id || !transport || m.id === id || transport.includes("127.0.0.1")) continue;
-      if (!isAnimeAddon(m) && !isSubtitleAddon(m)) continue;
+      if (!isAnimeAddon(m) && !isVideoAddon(m) && !isSubtitleAddon(m)) continue;
       upsertPlugin({
         id: m.id,
         kind: "anime",
@@ -581,9 +652,15 @@ function junkMeta(m: Meta, cat?: Catalog): boolean {
   return false;
 }
 
-function searchableCatalogs(man: Manifest): Catalog[] {
+/**
+ * Catalogs worth a text search. For a movie or series only the matching type is
+ * asked: a series catalog answering a film query is noise the ranker then has to
+ * discard. Anime (and no kind) keeps every searchable catalog, as before.
+ */
+export function searchableCatalogs(man: Pick<Manifest, "catalogs">, kind?: MediaKind): Catalog[] {
+  const only = liveType(kind);
   const cats = man.catalogs ?? [];
-  const searchable = (c: Catalog) => extraNames(c).includes("search");
+  const searchable = (c: Catalog) => extraNames(c).includes("search") && (!only || c.type === only);
   const found = cats.filter(searchable);
   const order = ["movie", "series", "anime"];
   return [...found].sort((a, b) => {
@@ -741,7 +818,9 @@ async function collectStreams(
   for (const id of ids) {
     const memoKey = `${name}|${idShape(id)}`;
     const known = answered.get(memoKey);
-    const order = known ? [known, ...types.filter((t) => t !== known)] : types;
+    /* `tt` is one id shape for films and shows alike, so what answered for a movie
+       must not lead the probe for an episode: only reorder within what we'd ask. */
+    const order = known && types.includes(known) ? [known, ...types.filter((t) => t !== known)] : types;
     for (const type of order) {
       if (signal.aborted) return { name, streams: [], error: "dropped — another source already answered" };
       const left = until - Date.now();
@@ -778,7 +857,7 @@ async function collectStreams(
   return { name, streams: [], error };
 }
 
-function playlistFrom(bags: Bag[], want?: Slot, prefer?: Lang, title?: string): Playlist {
+function playlistFrom(bags: Bag[], want?: Slot, prefer?: Lang, title?: string, native?: Lang): Playlist {
   const items: Candidate[] = [];
   const seen = new Set<string>();
   for (const b of bags) {
@@ -802,7 +881,7 @@ function playlistFrom(bags: Bag[], want?: Slot, prefer?: Lang, title?: string): 
       });
     }
   }
-  return present(items, prefer);
+  return present(items, prefer, native);
 }
 
 function playableUrls(streams: Stream[], want?: Slot): string[] {
@@ -889,9 +968,26 @@ export async function raceFirstPlayable(
  */
 const inflight = new Map<string, Promise<Result<Playlist>>>();
 
+/**
+ * `kind` movie/series switches off everything anime-specific: the id mapping
+ * service, the `kitsu:`/`anilist:` ids it yields, and the series-then-anime probe.
+ * Those titles are asked by IMDb id alone (`tt…` for a film, `tt…:season:episode`
+ * for an episode) and only of addons that serve the matching type.
+ */
+type ResolveExtras = {
+  via?: string;
+  mediaId?: number;
+  kind?: MediaKind;
+  lang?: Lang;
+  /** The title's own language, where a release that names none is filed. */
+  native?: Lang;
+  title?: string;
+  fresh?: boolean;
+};
+
 export async function resolveStreams(
   chapterId: string,
-  extras?: { via?: string; mediaId?: number; lang?: Lang; title?: string; fresh?: boolean },
+  extras?: ResolveExtras,
 ): Promise<Result<Playlist>> {
   const lang = extras?.lang;
   const key = `${RANK_VERSION}|${chapterId}|${extras?.via ?? ""}|${extras?.mediaId ?? ""}`;
@@ -916,10 +1012,12 @@ export async function resolveStreams(
 async function resolveUncached(
   chapterId: string,
   key: string,
-  extras?: { via?: string; mediaId?: number; lang?: Lang; title?: string; fresh?: boolean },
+  extras?: ResolveExtras,
 ): Promise<Result<Playlist>> {
   const [boundId, id] = split(chapterId);
   const lang = extras?.lang;
+  const kind = extras?.kind;
+  const live = liveType(kind);
   const plugins = listStoredPlugins("anime").filter((p) => p.installed && p.plugin_url);
   const ordered = [
     ...plugins.filter((p) => p.id === boundId),
@@ -931,21 +1029,20 @@ async function resolveUncached(
      after the first title — running them together keeps the added round trip off
      the critical path entirely. */
   const [mapped, mans] = await Promise.all([
-    animeIds(extras?.via, extras?.mediaId),
+    live ? ({} as AnimeIds) : animeIds(extras?.via, extras?.mediaId),
     Promise.all(ordered.map((p) => manifestCached(p.plugin_url!))),
   ]);
-  const ids = extraStreamIds(id, {
-    via: extras?.via,
-    mediaId: extras?.mediaId,
-    ids: mapped,
-  });
+  const ids = extraStreamIds(
+    id,
+    live ? undefined : { via: extras?.via, mediaId: extras?.mediaId, ids: mapped },
+  );
 
   const targets = ordered
     .map((p, i) => {
       const man = mans[i];
-      if (!man || !servesStreams(man)) return null;
+      if (!man || !servesStreams(man) || (kind && !servesKind(man, kind))) return null;
       const mine = idsFor(man, ids);
-      return mine.length ? { p, ids: mine, types: streamTypesFor(man, id) } : null;
+      return mine.length ? { p, ids: mine, types: live ? [live] : streamTypesFor(man, id) } : null;
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
 
@@ -966,7 +1063,7 @@ async function resolveUncached(
   const all = bags.flatMap((b) => b.streams);
   const failures = bags.filter((b) => b.error).map((b) => `${b.name} ${b.error}.`);
 
-  const list = playlistFrom(bags, want, lang, extras?.title);
+  const list = playlistFrom(bags, want, lang, extras?.title, extras?.native);
   if (list.groups.length) {
     remember(key, list);
     return Ok(list);
@@ -1150,6 +1247,68 @@ export function resolveEmbeddedSubtitles(
   return embeddedSubtitlesDetailed(ctx, hint);
 }
 
+/**
+ * Binding `source_id` for a movie or series the metadata chain already knows by IMDb
+ * id. The id is the whole answer, so there is nothing to search and nothing to store:
+ * streams are asked of every installed addon that serves the kind.
+ */
+export const IMDB_SOURCE = "imdb";
+
+/**
+ * `imdb::movie:tt0111161` / `imdb::series:tt0944947`. A bare IMDb id does not say
+ * whether it is a film or a show, and the chapter list differs, so the type rides in
+ * the id. Chapter ids stay plain: `imdb::tt0111161`, `imdb::tt0944947:1:1`.
+ */
+export function imdbMangaId(kind: "movie" | "series", imdb: string): string {
+  return `${IMDB_SOURCE}::${TYPE_OF[kind]}:${imdb}`;
+}
+
+/**
+ * Episodes for an IMDb-bound title. A film is one synthetic entry and costs nothing.
+ * A series is Cinemeta's episode list: it supplies metadata only, never a stream.
+ *
+ * Season 0 (specials) goes last, the same convention as addon-supplied lists and the
+ * season chips, so regular episodes keep the absolute units 1..N that `Media.units`
+ * counts (list position + 1) and a special can never shift "next episode".
+ */
+async function imdbChapters(spec: string, refresh = false): Promise<Result<SourceChapter[]>> {
+  const m = /^(movie|series):(tt\d+)$/.exec(spec);
+  if (!m) return Err("That is not an IMDb-bound title.");
+  const [, type, imdb] = m;
+  if (type === "movie") {
+    return Ok([
+      { id: `${IMDB_SOURCE}::${imdb}`, number: 1, name: "Movie", scanlator: null, uploadDate: null, pageCount: null },
+    ]);
+  }
+
+  const key = `imdb|${imdb}`;
+  const last = chapterLists.get(key);
+  if (last && !refresh && Date.now() - last.at <= CHAPTERS_TTL_MS) return Ok(last.chapters);
+  const r = await fetchSeriesEpisodes(imdb);
+  if (!r.ok) return Err(r.reason, last?.at);
+  if (!r.value.length) return Err("Cinemeta has no episodes listed for that series yet.", last?.at);
+
+  const ordered = [...r.value].sort(
+    (a, b) => seasonRank(a.season) - seasonRank(b.season) || a.episode - b.episode,
+  );
+  const chapters = ordered.map((e): SourceChapter => {
+    const released = e.released ? Date.parse(e.released) : NaN;
+    return {
+      id: `${IMDB_SOURCE}::${imdb}:${e.season}:${e.episode}`,
+      number: e.episode,
+      name: e.title ?? `Episode ${e.episode}`,
+      scanlator: e.season > 0 ? `S${e.season}` : "Specials",
+      uploadDate: Number.isNaN(released) ? null : released,
+      pageCount: null,
+      season: e.season,
+      thumbnailUrl: e.thumbnail,
+      overview: e.overview,
+    };
+  });
+  rememberChapters(key, chapters);
+  return Ok(chapters);
+}
+
 export const stremio: SourceBackend = {
   name: "Stremio",
   kind: "anime",
@@ -1157,25 +1316,29 @@ export const stremio: SourceBackend = {
   async listSources() {
     const installed = listStoredPlugins("anime").filter((p) => p.installed);
     return Ok(
-      installed.map(
-        (p): SourceInfo => ({
+      installed.map((p): SourceInfo => {
+        const man = peekManifest(p.plugin_url);
+        const types = man ? declaredTypes(man) : undefined;
+        return {
           id: p.id,
           name: p.name,
           lang: p.lang,
           iconUrl: p.icon_url,
           kind: "anime",
           isLocal: false,
-        }),
-      ),
+          ...(types?.length ? { types } : {}),
+          ...(man ? { streams: servesStreams(man) } : {}),
+        };
+      }),
     );
   },
 
-  async search(sourceId, query) {
+  async search(sourceId, query, kind) {
     const p = getPlugin(sourceId, "anime");
     if (!p?.plugin_url) return Err(`Addon ${sourceId} is not installed.`);
     const man = await manifest(p.plugin_url);
     if (!man.ok) return man;
-    const catalogs = searchableCatalogs(man.value);
+    const catalogs = searchableCatalogs(man.value, kind);
     if (!catalogs.length) return Ok([]);
     const base = addonBase(p.plugin_url);
     const seen = new Set<string>();
@@ -1210,8 +1373,9 @@ export const stremio: SourceBackend = {
     return hardError ? Err(hardError) : Ok([]);
   },
 
-  async chapters(mangaId) {
+  async chapters(mangaId, refresh) {
     const [sourceId, id] = split(mangaId);
+    if (sourceId === IMDB_SOURCE) return imdbChapters(id, refresh);
     const p = getPlugin(sourceId, "anime");
     if (!p?.plugin_url) return Err("That anime addon is not installed.");
     const cacheKey = `ch2|${mangaId}`;

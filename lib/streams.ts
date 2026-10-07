@@ -21,7 +21,7 @@ import { LANGS, bucketLangs, subtitleLangs, trackLangs, type Lang } from "./audi
  * fixed, because nothing ever asked the question again. It lives here because
  * every one of those layers already imports this module.
  */
-export const RANK_VERSION = 8;
+export const RANK_VERSION = 9;
 
 export type Quality = "2160p" | "1080p" | "720p" | "480p";
 
@@ -350,8 +350,8 @@ function direct(c: Candidate): boolean {
   return c.url.includes("url=") && !SCRAPE.test(c.text);
 }
 
-export function preferUrl(text: string, url: string, lang: Lang): number {
-  const buckets = bucketLangs(text);
+export function preferUrl(text: string, url: string, lang: Lang, native: Lang = "ja"): number {
+  const buckets = bucketLangs(text, native);
   let n = 0;
   if (buckets.length === 1 && buckets[0] === lang) n += 8;
   else if (buckets.includes(lang)) n += 2;
@@ -361,7 +361,7 @@ export function preferUrl(text: string, url: string, lang: Lang): number {
   if (lang === "en" && /\benglish\s*dub\b/i.test(text)) n += 6;
   if (lang === "ja" && /\bsub\b/i.test(text) && !/\bdub\b/i.test(text)) n += 4;
   if (lang === "ja" && /\bmulti\b/i.test(text) && !/🎧\s*Audio:\s*Japanese/i.test(text)) n -= 8;
-  if (lang === "en" && trackLangs(text).includes("ja") && trackLangs(text).includes("en")) n -= 3;
+  if (lang === "en" && trackLangs(text, native).includes("ja") && trackLangs(text, native).includes("en")) n -= 3;
   if (SCRAPE.test(text)) n -= 15;
   // Seeders and size decide among torrents; see `direct` for HTTP against them.
   if (url.includes("ih=")) n += seedScore(text) + sizeScore(text);
@@ -414,12 +414,12 @@ const SAME_WORK_BONUS = 8;
  */
 const EXACT_SLOT_BONUS = 14;
 
-const rowScore = (c: Candidate, lang: Lang) =>
-  preferUrl(c.text, c.url, lang) +
+const rowScore = (c: Candidate, lang: Lang, native: Lang) =>
+  preferUrl(c.text, c.url, lang, native) +
   (c.sameWork ? SAME_WORK_BONUS : 0) +
   (c.exactSlot ? EXACT_SLOT_BONUS : 0);
 
-function rankRows(rows: Candidate[], lang: Lang): Candidate[] {
+function rankRows(rows: Candidate[], lang: Lang, native: Lang): Candidate[] {
   return [...rows].sort((a, b) => {
     const pa = browserPlayable(a.text) ? 1000 : 0;
     const pb = browserPlayable(b.text) ? 1000 : 0;
@@ -430,16 +430,21 @@ function rankRows(rows: Candidate[], lang: Lang): Candidate[] {
     const ha = direct(a) ? 10 : 0;
     const hb = direct(b) ? 10 : 0;
     if (ha !== hb) return hb - ha;
-    return rowScore(b, lang) - rowScore(a, lang);
+    return rowScore(b, lang, native) - rowScore(a, lang, native);
   });
 }
 
-export function present(items: Candidate[], prefer?: Lang): Playlist {
+/**
+ * `native` is the language of the title itself, and where a release that names none
+ * is filed. It is Japanese for anime and the original language for a film or show;
+ * without it every untagged movie rip landed in the Japanese bucket.
+ */
+export function present(items: Candidate[], prefer?: Lang, native: Lang = "ja"): Playlist {
   const buckets = new Map<string, Candidate[]>();
   for (const item of items) {
     if (!item.url) continue;
     const q = qualityOf(item.text);
-    for (const lang of bucketLangs(item.text)) {
+    for (const lang of bucketLangs(item.text, native)) {
       const id = `${q}-${lang}`;
       const rows = buckets.get(id);
       if (rows) rows.push(item);
@@ -454,7 +459,7 @@ export function present(items: Candidate[], prefer?: Lang): Playlist {
       if (!rows?.length) continue;
       const seen = new Set<string>();
       const picks: StreamPick[] = [];
-      for (const r of rankRows(rows, lang)) {
+      for (const r of rankRows(rows, lang, native)) {
         if (seen.has(r.url)) continue;
         seen.add(r.url);
         picks.push({
@@ -469,7 +474,7 @@ export function present(items: Candidate[], prefer?: Lang): Playlist {
     }
   }
 
-  const preferred = groups.find((g) => g.lang === "ja")?.id ?? groups[0]?.id ?? null;
+  const preferred = groups.find((g) => g.lang === native)?.id ?? groups[0]?.id ?? null;
   return forLang({ groups, preferred }, prefer);
 }
 

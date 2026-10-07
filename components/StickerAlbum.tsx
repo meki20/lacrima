@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 type Slot = {
   id: string;
@@ -95,7 +96,7 @@ export default function StickerAlbum({ titles }: { titles: Title[] }) {
         <section className="sticker-title" key={`${t.via}-${t.id}`}>
           <div className="row-h">
             <h2>
-              <a href={t.href}>{t.title}</a>
+              <Link prefetch={false} href={t.href}>{t.title}</Link>
             </h2>
             <span className="mono">
               {t.earned} / {t.slots.length}

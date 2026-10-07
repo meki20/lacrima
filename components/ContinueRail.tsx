@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, type MouseEvent as ReactMouseEvent } from "react";
+import Link from "next/link";
 import type { ContinueItem } from "@/lib/progress";
 
 const COAST_DECAY = 0.92;
@@ -79,7 +80,7 @@ export default function ContinueRail({ items }: { items: ContinueItem[] }) {
           onDragStart={(e) => e.preventDefault()}
         >
           {items.map((m) => (
-            <a className="cont-card" key={`${m.kind}-${m.id}`} href={`/title/${m.via}/${m.kind}/${m.id}`}>
+            <Link prefetch={false} className="cont-card" key={`${m.kind}-${m.id}`} href={`/title/${m.via}/${m.kind}/${m.id}`}>
               <div className="cont-art" style={{ background: m.color ?? "var(--s2)" }}>
                 {m.cover ? <img src={m.cover} alt="" loading="lazy" decoding="async" /> : null}
               </div>
@@ -93,7 +94,7 @@ export default function ContinueRail({ items }: { items: ContinueItem[] }) {
                   <i style={{ width: `${Math.round((m.ratio ?? 0) * 100)}%` }} />
                 </div>
               </div>
-            </a>
+            </Link>
           ))}
         </div>
         <button className="arrow right" type="button" onClick={() => nudge(1)} aria-label="Scroll Continue right">

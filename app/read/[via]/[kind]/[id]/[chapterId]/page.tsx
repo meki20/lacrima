@@ -1,19 +1,21 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import NovelReader from "@/components/NovelReader";
 import Player from "@/components/Player";
 import Reader from "@/components/Reader";
 import { sanitizeNovelHtml } from "@/lib/api/sanitize";
+import { nativeLang } from "@/lib/audio";
 import { getBinding } from "@/lib/match";
-import type { MediaKind, ProviderSlug } from "@/lib/media";
-import { fetchTitle } from "@/lib/metadata";
-import { titleBackHref } from "@/lib/nav";
+import { isVideoKind } from "@/lib/kinds";
+import { fetchTitle, parseTitleRoute } from "@/lib/metadata";
+import { nextPlayable, titleBackHref } from "@/lib/nav";
 import { paragraphIndex } from "@/lib/novel-html";
 import { currentProfile } from "@/lib/profile";
 import { profileSettings, readerSettings, subtitleChoice } from "@/lib/settings";
 import type { ProgressWrite } from "@/lib/progress-write";
 import { getProgress, parseAnchor } from "@/lib/progress";
 import { loadPlaylist } from "@/lib/play-cache";
-import { chaptersFor } from "@/lib/resolve";
+import { bindingForPlayback, chaptersFor } from "@/lib/resolve";
 import { backend } from "@/lib/sources";
 import { resolveStreams } from "@/lib/sources/stremio";
 import { fetchSeries, progressTree } from "@/lib/series";
@@ -54,43 +56,64 @@ export default async function Read({
 }) {
   const p = await params;
   const end = (await searchParams).end === "1";
-  const via = p.via as ProviderSlug;
-  const kind = p.kind as MediaKind;
-  const mediaId = Number(p.id);
+  const route = parseTitleRoute(p.via, p.kind, p.id);
+  if (!route) notFound();
+  const { via, kind, id: mediaId } = route;
+  const video = isVideoKind(kind);
   const chapterId = decodeURIComponent(p.chapterId);
   let back = `/title/${via}/${kind}/${mediaId}`;
   const src = backend(kind);
 
-  const binding = getBinding(via, mediaId, kind);
+  /* Memoised by fetchTitle, so every later call below joins this one. */
+  const mediaP = fetchTitle(via, kind, mediaId);
+  /* A movie or series is bound by its IMDb id, which only metadata knows, so only a pinned
+     binding may skip that wait: an unpinned stored one is an old search result that the
+     id outranks (the title page does the same, see `bindingForPlayback`). */
+  const stored = getBinding(via, mediaId, kind);
+  const binding =
+    stored && (stored.pinned || (kind !== "movie" && kind !== "series"))
+      ? stored
+      : await mediaP.then((m) => (m.ok ? bindingForPlayback(m.value) : (stored ?? null)));
   if (!binding) {
-    return <Dead back={back} reason="This title is not bound to a source yet." />;
+    return (
+      <Dead
+        back={back}
+        reason={
+          kind === "movie" || kind === "series"
+            ? "No installed source can stream this title. Add a repository in Sources."
+            : "This title is not bound to a source yet."
+        }
+      />
+    );
   }
 
   /* Asking every addon for this episode costs seconds to half a minute, and it used
      to start only once the browser had shipped, parsed and hydrated the player. It
      is the same work either way, so start it here and let it run under the render;
      `resolveStreams` dedupes, so the player's own request joins this one. */
-  if (kind === "anime" && !loadPlaylist({ via, mediaId, chapterId })) {
-    void fetchTitle(via, kind, mediaId)
+  if (video && !loadPlaylist({ via, mediaId, chapterId })) {
+    void mediaP
       .then((t) =>
         resolveStreams(chapterId, {
           via,
           mediaId,
+          kind,
           title: t.ok ? t.value.title : undefined,
+          native: nativeLang(kind, t.ok ? t.value.language : undefined),
         }),
       )
       .catch(() => undefined);
   }
 
   const [media, list, pages, me, seriesR] = await Promise.all([
-    fetchTitle(via, kind, mediaId),
+    mediaP,
     chaptersFor(binding),
-    kind === "anime" ? null : src.pages(chapterId, { via, mediaId }),
+    video ? null : src.pages(chapterId, { via, mediaId }),
     currentProfile(),
     fetchSeries(via, kind, mediaId),
   ]);
   const settings = profileSettings(me.id);
-  const savedSub = kind === "anime" ? subtitleChoice(me.id, via, mediaId, chapterId) : null;
+  const savedSub = video ? subtitleChoice(me.id, via, mediaId, chapterId) : null;
 
   back = titleBackHref(via, kind, mediaId, seriesR.ok ? seriesR.value : null);
 
@@ -138,13 +161,16 @@ export default async function Read({
   const initialTime =
     anchor?.kind === "seconds" && String(anchor.chapterId) === chapterId ? anchor.at : 0;
 
-  const chapterLabel = here
-    ? kind === "anime"
-      ? `${here.season && here.season > 0 ? `S${here.season} · ` : ""}E${here.number} · ${here.name}`
-      : `${here.name}${here.scanlator ? ` · ${here.scanlator}` : ""}`
-    : kind === "anime"
-      ? "Episode"
-      : `Chapter ${chapterId}`;
+  const chapterLabel =
+    kind === "movie"
+      ? (m.year ? String(m.year) : "Movie")
+      : here
+        ? video
+          ? `${here.season && here.season > 0 ? `S${here.season} · ` : ""}E${here.number} · ${here.name}`
+          : `${here.name}${here.scanlator ? ` · ${here.scanlator}` : ""}`
+        : video
+          ? "Episode"
+          : `Chapter ${chapterId}`;
 
   const progress: ProgressWrite = {
     via: m.via,
@@ -156,7 +182,7 @@ export default async function Read({
     chapterId,
     chapterName:
       here?.name ??
-      (kind === "anime" ? `Episode ${here?.number ?? ""}` : `Chapter ${chapterId}`),
+      (video ? `Episode ${here?.number ?? ""}` : `Chapter ${chapterId}`),
     season: here?.season,
     episode: here?.number,
     durationSeconds: m.unitMinutes ? m.unitMinutes * 60 : null,
@@ -164,13 +190,17 @@ export default async function Read({
     ...tree,
   };
 
-  if (kind === "anime") {
+  if (video) {
+    /* A film or show opens in the language it was made in; the profile's audio setting
+       is an anime preference (sub or dub) and has no say over Shawshank. */
+    const native = nativeLang(kind, m.language);
+    const live = kind === "movie" || kind === "series";
     const playFor = (cid: string) =>
       `/api/play?${new URLSearchParams({ kind, chapterId: cid, via, mediaId: String(mediaId) })}`;
     /* Resolving an episode costs ~28s the first time and is cached after, so the
        next one is resolved while this one plays: by the time the credits roll it
        is already warm. This is the whole reason "next" feels instant. */
-    const upNext = at >= 0 ? chapters[at + 1] : undefined;
+    const upNext = nextPlayable(kind, chapters, chapterId);
     return (
       <Player
         key={`${via}:${mediaId}:${chapterId}`}
@@ -178,7 +208,7 @@ export default async function Read({
         title={m.title}
         episodeLabel={chapterLabel}
         backHref={back}
-        nextHref={at >= 0 ? hop(at + 1) : null}
+        nextHref={upNext ? hop(at + 1) : null}
         nextLabel={
           upNext
             ? `${upNext.season && upNext.season > 0 ? `S${upNext.season} · ` : ""}E${upNext.number} · ${upNext.name}`
@@ -197,7 +227,8 @@ export default async function Read({
         initialTime={initialTime}
         durationSeconds={m.unitMinutes ? m.unitMinutes * 60 : null}
         progress={progress}
-        settings={settings}
+        settings={live ? { ...settings, audio_lang: native } : settings}
+        nativeLang={native}
       />
     );
   }

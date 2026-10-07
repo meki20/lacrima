@@ -168,7 +168,7 @@ export default function EpisodeList({
                 Play episode
               </a>
               <MarkMenu
-                kind="anime"
+                kind={progress.kind}
                 read={indexOffset + i + 1 <= unit}
                 onMark={() => void play(c).then(() => router.refresh())}
                 onUpTo={() => void play(c, { exact: true }).then(() => router.refresh())}

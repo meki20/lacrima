@@ -1,11 +1,15 @@
 import { revalidatePath } from "next/cache";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import TopBar from "@/components/TopBar";
 import BackupTransfer from "@/components/BackupTransfer";
+import VetBadge from "@/components/VetBadge";
 import { Failed } from "@/components/ui";
 import type { MediaKind } from "@/lib/media";
-import { backend, clearSourceHealth } from "@/lib/sources";
+import { backend, clearSourceHealth, langMatches } from "@/lib/sources";
 import { disabledIds, setSourceDisabled } from "@/lib/sources/store";
+import type { VetKind } from "@/lib/vet";
+import { ensureVetted, vetViewsFor } from "@/lib/vet-service";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +21,10 @@ const KINDS: { id: MediaKind; label: string; hint: string; placeholder: string }
     placeholder: "https://github.com/keiyoushi/extensions/raw/repo/index.pb",
   },
   {
+    // Stored as kind "anime": one Stremio addon pool serves anime, movies and series.
     id: "anime",
-    label: "Anime",
-    hint: "Stremio addon or catalog (manifest.json). Keiyoushi and Aniyomi APK indexes will not run here.",
+    label: "Video",
+    hint: "Stremio addon or catalog (manifest.json), shared by anime, movies and series. Keiyoushi and Aniyomi APK indexes will not run here.",
     placeholder: "https://v3-cinemeta.strem.io/manifest.json",
   },
   {
@@ -31,7 +36,7 @@ const KINDS: { id: MediaKind; label: string; hint: string; placeholder: string }
 ];
 
 function parseKind(raw: string | undefined): MediaKind {
-  return raw === "anime" || raw === "novel" || raw === "manga" ? raw : "manga";
+  return raw === "anime" || raw === "movie" || raw === "series" || raw === "drama" ? "anime" : raw === "novel" ? "novel" : "manga";
 }
 
 export default async function Sources({
@@ -62,6 +67,7 @@ export default async function Sources({
       }
       /* Anime/novel add already pulled the index. Manga only registers the URL. */
       if (k === "manga") await backend(k).refreshExtensions();
+      void ensureVetted(k as VetKind);
     }
     revalidatePath("/sources");
     redirect(`/sources?kind=${k}`);
@@ -87,6 +93,7 @@ export default async function Sources({
       String(formData.get("pkgName")),
       formData.get("install") === "1",
     );
+    void ensureVetted(k as VetKind);
     clearSourceHealth();
     revalidatePath("/sources");
     revalidatePath("/");
@@ -99,6 +106,7 @@ export default async function Sources({
     const enable = formData.get("enable") === "1";
     if (k === "manga") setSourceDisabled(k, id, !enable);
     else await backend(k).setExtensionInstalled(id, enable);
+    void ensureVetted(k as VetKind);
     clearSourceHealth();
     revalidatePath("/sources");
     revalidatePath("/");
@@ -108,6 +116,18 @@ export default async function Sources({
   const off = disabledIds(kind);
   const meta = KINDS.find((k) => k.id === kind)!;
   const extList = extensions;
+  /* Also a safety net: whatever is on and has never been vetted gets queued on the way past. */
+  void ensureVetted(kind as VetKind);
+  const vet = vetViewsFor(kind as VetKind, [
+    ...remote.map((s) => s.id),
+    ...(kind !== "manga" && extList?.ok ? extList.value.map((e) => e.pkgName) : []),
+  ]);
+  /* A language Lacrima never searches is not vetted, so say so instead of offering a retry that cannot run. */
+  if (kind === "manga") {
+    for (const s of remote) {
+      if (!langMatches(s.lang)) vet[s.id] = { state: "na", tip: "Lacrima only searches the languages set by LACRIMA_LANGS." };
+    }
+  }
 
   return (
     <>
@@ -115,17 +135,18 @@ export default async function Sources({
       <main style={{ maxWidth: 820 }} suppressHydrationWarning>
         <div className="filters">
           {KINDS.map((k) => (
-            <a
+            <Link
+              prefetch={false}
               key={k.id}
               className={`chip${kind === k.id ? " on" : ""}`}
               href={`/sources?kind=${k.id}`}
             >
               {k.label}
-            </a>
+            </Link>
           ))}
         </div>
 
-        <BackupTransfer kind="sources" title="Source backup" description="Repository lists, extension choices and source switches for manga, anime and novels." importNote="Import adds the saved sources without removing the ones already here." />
+        <BackupTransfer kind="sources" title="Source backup" description="Repository lists, extension choices and source switches for manga, video and novels." importNote="Import adds the saved sources without removing the ones already here." />
 
         <section>
           <div className="row-h">
@@ -147,7 +168,7 @@ export default async function Sources({
           ) : repos.value.length === 0 ? (
             <div className="empty">
               <b>No {meta.label.toLowerCase()} repositories</b>
-              Paste an index URL below. Manga, anime and novels are separate lists on
+              Paste an index URL below. Manga, video and novels are separate lists on
               purpose — a manga repo cannot serve the other two.
             </div>
           ) : (
@@ -243,6 +264,9 @@ export default async function Sources({
                       {e.lang} · {e.version}
                     </span>
                   </div>
+                  {kind !== "manga" && (
+                    <VetBadge kind={kind as VetKind} id={e.pkgName} name={e.name} initial={vet[e.pkgName]} />
+                  )}
                   {e.isInstalled ? (
                     <span className="dot" style={{ background: "var(--ok)" }} />
                   ) : (
@@ -292,6 +316,7 @@ export default async function Sources({
                         {s.lang} / {s.kind} / {s.id}
                       </span>
                     </div>
+                    <VetBadge kind={kind as VetKind} id={s.id} name={s.name} initial={vet[s.id]} />
                     <span className="badge">{s.kind}</span>
                     {on ? (
                       <span className="dot" style={{ background: "var(--ok)" }} />

@@ -69,6 +69,15 @@ data class SubtitleChoice(
     val src: String = url,
 )
 
+data class EmbeddedSubtitleResult(val cues: List<SubtitleChoice>, val pending: Boolean)
+
+/** Keep external choices while a growing torrent refreshes an embedded track. */
+internal fun mergeSubtitles(existing: List<SubtitleChoice>, incoming: List<SubtitleChoice>): List<SubtitleChoice> {
+    val byId = existing.associateByTo(linkedMapOf()) { it.id }
+    incoming.forEach { byId[it.id] = it }
+    return byId.values.sortedWith(compareBy<SubtitleChoice> { it.label }.thenBy { it.id })
+}
+
 data class TimedCue(val start: Double, val end: Double, val text: String)
 
 private val CLOCK = Regex("(?:\\d{1,2}:)?\\d{2}:\\d{2}[.,]\\d{2,3}")
@@ -299,6 +308,19 @@ internal fun withH264Video(url: String): String {
     if (queryValues(url, "video").contains("h264")) return url
     return if ("?" in url) "$url&video=h264" else "$url?video=h264"
 }
+
+/** A Cast receiver fetches from the server, never from the phone's local decoder. */
+internal fun castStreamUrl(url: String, startMs: Long): String {
+    val query = url.substringAfter('?', "").split('&').filter {
+        it.isNotEmpty() && it.substringBefore('=') !in setOf("pack", "video", "t")
+    }
+    val stream = "${url.substringBefore('?')}?${(query + "pack=ts" + "video=h264" + "t=${startMs.coerceAtLeast(0) / 1000.0}").joinToString("&")}"
+    val origin = java.net.URI(url).let { "${it.scheme}://${it.authority}" }
+    return "$origin/api/cast?src=${java.net.URLEncoder.encode(stream, "UTF-8")}"
+}
+
+internal fun castSubtitleUrl(url: String, startMs: Long): String =
+    "$url${if ('?' in url) '&' else '?'}cast=1&t=${startMs.coerceAtLeast(0) / 1000.0}"
 
 /** These are the Media3 decoder errors a server-side 8-bit H.264 retry can fix. */
 internal fun needsH264Fallback(errorCodeName: String): Boolean = errorCodeName in setOf(

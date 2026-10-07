@@ -11,6 +11,7 @@ import {
   progressRatio,
   shelfItems,
   sortLibrary,
+  toItem,
 } from "./library.ts";
 
 const item = (over: Partial<LibraryItem> & { id: number; title: string }): LibraryItem => ({
@@ -112,4 +113,31 @@ test("collapseLibrary folds Dr. Stone seasons into one card", () => {
   );
   assert.equal(out[0]!.status, "reading");
   assert.equal(out[0]!.pin, 1);
+});
+
+test("collapseLibrary leaves movies and series as separate cards, in order", () => {
+  const rows = [
+    item({ id: 1, via: "cinemeta", kind: "movie", title: "Dune", added_at: 5 }),
+    item({ id: 2, via: "cinemeta", kind: "movie", title: "Dune: Part Two", added_at: 4 }),
+    item({ id: 3, via: "cinemeta", kind: "movie", title: "Joker (2019)", added_at: 3 }),
+    item({ id: 4, via: "cinemeta", kind: "series", title: "The Bear", added_at: 2 }),
+    item({ id: 5, via: "cinemeta", kind: "series", title: "The Bear Season 2", added_at: 1 }),
+  ];
+  assert.deepEqual(collapseLibrary(rows).map((m) => m.title), rows.map((m) => m.title));
+});
+
+test("a library row for a film keeps its full title; a franchise row still folds", () => {
+  const row = (media_type: LibraryItem["kind"], title: string) => toItem({
+    profile_id: 1, via: "cinemeta", media_id: 1, media_type, status: "reading", score: null, added_at: 1,
+    title, cover: null, color: null, units: 1, genres: "[]", pin: 0, progress_unit: 1,
+  });
+  assert.equal(row("movie", "Dune: Part Two (2024)").title, "Dune: Part Two (2024)");
+  assert.equal(row("series", "The Bear Season 2").title, "The Bear Season 2");
+  assert.equal(row("anime", "Frieren Season 2").title, "Frieren");
+  assert.equal(row("movie", "Dune").href, "/title/cinemeta/movie/1");
+});
+
+test("progressLabel: a film is a film, a series counts episodes", () => {
+  assert.equal(progressLabel({ kind: "movie", unit: 1, units: 1 }), "Movie");
+  assert.equal(progressLabel({ kind: "series", unit: 14, units: 62 }), "14 / 62");
 });

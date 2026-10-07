@@ -17,7 +17,7 @@ const CARD = `
   type
   format
   title { romaji english }
-  coverImage { large color }
+  coverImage { extraLarge large color }
   bannerImage
   description(asHtml: false)
   genres
@@ -32,7 +32,7 @@ type RawMedia = {
   type: "ANIME" | "MANGA";
   format: string | null;
   title: { romaji: string | null; english: string | null };
-  coverImage: { large: string | null; color: string | null } | null;
+  coverImage: { extraLarge: string | null; large: string | null; color: string | null } | null;
   bannerImage: string | null;
   description: string | null;
   genres: string[] | null;
@@ -52,7 +52,8 @@ function shape(m: RawMedia): Media {
     kind,
     title,
     aliases: otherTitles(title, m.title.english, m.title.romaji),
-    cover: m.coverImage?.large ?? null,
+    // `large` is 230px wide; posters render ~198 CSS px, which is soft on 2x screens.
+    cover: m.coverImage?.extraLarge ?? m.coverImage?.large ?? null,
     banner: m.bannerImage,
     color: m.coverImage?.color ?? null,
     description: clean(m.description),
@@ -128,6 +129,7 @@ function pickMedia(block: { media?: RawMedia[] } | undefined): Media[] {
 export const anilist: Provider = {
   slug: "anilist",
   name: "AniList",
+  kinds: ["anime", "manga", "novel"],
 
   async fetchTitle(kind, id) {
     const r = await request<{ Media: RawMedia | null }>(
@@ -175,6 +177,8 @@ export const anilist: Provider = {
       anime: pickMedia(r.value.anime),
       manga: pickMedia(r.value.manga),
       novels: pickMedia(r.value.novels),
+      movies: [],
+      series: [],
     });
   },
 

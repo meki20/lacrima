@@ -1,4 +1,5 @@
-import type { MediaKind, ProviderSlug } from "../media.ts";
+import { isProviderSlug, MEDIA_KINDS, PROVIDER_SLUGS, type MediaKind, type ProviderSlug } from "../media.ts";
+import { parseKind as kindOf } from "../kinds.ts";
 import type { Profile } from "../profile.ts";
 import type { Result } from "../result.ts";
 
@@ -79,14 +80,25 @@ export function profileFromHeaders(
   return profile;
 }
 
+const oneOf = (items: readonly string[]) => `${items.slice(0, -1).join(", ")}, or ${items[items.length - 1]}`;
+
 export function parseKind(raw: string | null | undefined): MediaKind {
-  if (raw === "anime" || raw === "manga" || raw === "novel") return raw;
-  throw new ApiFault(400, "invalid_kind", "Kind must be anime, manga, or novel.");
+  const kind = kindOf(raw);
+  if (kind) return kind;
+  throw new ApiFault(400, "invalid_kind", `Kind must be ${oneOf(MEDIA_KINDS)}.`);
 }
 
+/**
+ * Kinds the v1 list endpoints (home continue, library) serve. Movies and series are
+ * additive: a client that predates them maps an unknown kind to anime, so they must
+ * never appear in a list it renders. Title, progress and library writes accept them.
+ */
+export const V1_LIST_KINDS: readonly MediaKind[] = ["anime", "manga", "novel"];
+export const inV1Lists = (kind: MediaKind): boolean => V1_LIST_KINDS.includes(kind);
+
 export function parseProvider(raw: string | null | undefined): ProviderSlug {
-  if (raw === "anilist" || raw === "jikan" || raw === "kitsu") return raw;
-  throw new ApiFault(400, "invalid_provider", "Provider must be anilist, jikan, or kitsu.");
+  if (isProviderSlug(raw)) return raw;
+  throw new ApiFault(400, "invalid_provider", `Provider must be ${oneOf(PROVIDER_SLUGS)}.`);
 }
 
 export function positiveId(raw: unknown, field = "id"): number {

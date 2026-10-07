@@ -11,6 +11,7 @@ import {
 } from "react";
 import { LANGS, pickAudioTrack, type Lang } from "@/lib/audio";
 import {
+  appliedShift,
   cueAt,
   cueByChoice,
   fileHref,
@@ -25,6 +26,8 @@ import {
   CAPTION_SCALES,
   type SubChoice,
   type SubCue,
+  type SubFit,
+  type SubFits,
   type TimedCue,
 } from "@/lib/subs";
 import { pushProgress, usesSeriesTree, type ProgressWrite } from "@/lib/progress-write";
@@ -55,6 +58,8 @@ import {
   type StreamGroup,
 } from "@/lib/streams";
 import { mseSupported, useMseSrc } from "@/components/useMseSrc";
+import { useCast } from "@/components/useCast";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Controls,
@@ -109,6 +114,7 @@ const PATH = {
   mute: "M4 9.5h3L11 6v12L7 14.5H4zm11 0 4 5m0-5-4 5",
   full: "M4 9V4h5M20 9V4h-5M4 15v5h5m11-5v5h-5",
   popOut: "M3 5h18v14H3zM11 11h8v6h-8z",
+  cast: "M3 18h2M3 14a7 7 0 0 1 7 7M3 10a11 11 0 0 1 11 11M7 5h13v12h-3",
   arrow: "M14 6l-6 6 6 6",
 };
 
@@ -259,6 +265,7 @@ export default function Player({
   durationSeconds,
   progress,
   settings,
+  nativeLang: titleLang = "ja",
   savedSub,
 }: {
   title: string;
@@ -274,9 +281,14 @@ export default function Player({
   durationSeconds: number | null;
   progress: ProgressWrite;
   settings: { audio_lang: Lang; subtitle_lang: string; caption_scale: number };
+  /** What an untagged release is in: Japanese for anime, the original language for a film or show. */
+  nativeLang?: Lang;
   savedSub: string | null;
 }) {
   const router = useRouter();
+  /* The audio setting is an anime preference. A film or show plays in its own language, and
+     the relay falls back to the file's first track rather than reject a pick over a tag. */
+  const live = progress.kind === "movie" || progress.kind === "series";
   const player = useRef<MediaPlayerInstance>(null);
   const onProviderChange = useLocalHls();
 
@@ -316,6 +328,8 @@ export default function Player({
   const [subErr, setSubErr] = useState<string | null>(null);
   const [subLoading, setSubLoading] = useState(true);
   const [subFresh, setSubFresh] = useState(0);
+  /** How each subtitle file lines up with the audio, once enough of it has played. */
+  const [fits, setFits] = useState<SubFits>({});
   const [preferredSub, setPreferredSub] = useState<SubChoice>(() => savedSub ?? settings.subtitle_lang);
   const [subLang, setSubLang] = useState<SubChoice>(() => savedSub ?? settings.subtitle_lang);
   const [captionScale, setCaptionScale] = useState(() =>
@@ -573,6 +587,10 @@ export default function Player({
   /* A remux HTTP error is final for this pick. Do not hand the exact same 502
      URL to the native provider before selecting the next source. */
   const playSrc = !hydrated ? null : mse.httpError != null ? null : useMse && !mse.failed ? mse.url : src;
+  const cast = useCast(src, title, episodeLabel, cues, subLang);
+  const castState = useRef(cast);
+  castState.current = cast;
+  const [castMenuOpen, setCastMenuOpen] = useState(false);
 
   useEffect(() => {
     committed.current = null;
@@ -744,6 +762,11 @@ export default function Player({
     (seconds: number) => {
       const cap = clockDuration ?? seconds;
       const next = Math.max(0, Math.min(cap, seconds));
+      if (castState.current.connected) {
+        castState.current.seek(next);
+        setPosition(next);
+        return;
+      }
       clearStall();
       resume.current = next;
       setPosition(next);
@@ -766,12 +789,28 @@ export default function Player({
 
   const seekBy = useCallback(
     (seconds: number) => {
+      if (castState.current.connected) {
+        seekTo(castState.current.position + seconds);
+        return;
+      }
       const elapsed =
         document.querySelector<HTMLVideoElement>(".player-root video")?.currentTime ?? 0;
       seekTo((native.current ? 0 : startAt) + elapsed + seconds);
     },
     [seekTo, startAt],
   );
+
+  const wasCasting = useRef(false);
+  useEffect(() => {
+    if (cast.connected) {
+      player.current?.pause();
+      wasCasting.current = true;
+    } else if (wasCasting.current) {
+      wasCasting.current = false;
+      seekTo(cast.position);
+      void player.current?.play();
+    }
+  }, [cast.connected]);
 
   const startAtRef = useRef(startAt);
   startAtRef.current = startAt;
@@ -860,6 +899,21 @@ export default function Player({
       const wall = Date.now();
       const dt = (wall - lastWall.current) / 1000;
       lastWall.current = wall;
+      if (castState.current.connected) {
+        const absolute = castState.current.position;
+        if (!castState.current.paused && absolute > 0 && dt > 0 && dt < 2) pendingWatch.current += dt;
+        if (absolute > 0) {
+          resume.current = absolute;
+          setPosition((old) => Math.floor(old) === Math.floor(absolute) ? old : absolute);
+          const now = Math.floor(absolute);
+          if (now !== last && Date.now() - lastWrite >= 5_000) {
+            last = now;
+            lastWrite = Date.now();
+            writeProgress(now);
+          }
+        }
+        return;
+      }
       if (!media?.paused && currentTime > 0.2 && dt > 0 && dt < 2) {
         pendingWatch.current += dt;
       }
@@ -927,12 +981,50 @@ export default function Player({
   /* Only once a group is actually chosen, so this cannot flash while resolving. */
   const wrongLang = group && group.lang !== lang ? group : null;
   const audioLang = group?.lang ?? lang;
-  const activeCue = cueByChoice(cues, subLang);
+  const activeCue = cueByChoice(cues, subLang, fits);
 
   useEffect(() => {
     if (subLoading) return;
-    setSubLang(pickSubLang(cues, audioLang, preferredSub));
-  }, [cues, subLoading, audioLang, preferredSub]);
+    setSubLang(pickSubLang(cues, audioLang, preferredSub, fits));
+  }, [cues, subLoading, audioLang, preferredSub, fits]);
+
+  /* Subtitle files are timed for whichever release they were made against, not this
+     one. The remux writes the audio's speech band as it plays; once a few minutes
+     exist the server says which files line up with it and by how much. Polling stops
+     at the first file that matches, or when ten minutes of audio is all there will be. */
+  const alignLang = activeCue?.lang ?? wantedSub;
+  /* File ids repeat across episodes (`…-eng-0`) and a different release has different
+     timing, so a measurement outlives neither. A seek restart is the same release. */
+  useEffect(() => setFits((old) => (Object.keys(old).length ? {} : old)), [progress.chapterId, progress.via, progress.mediaId, gid, pick?.url]);
+  useEffect(() => {
+    if (!src || !hydrated || subLoading || !alignLang) return;
+    let live = true;
+    let tries = 0;
+    const q = new URLSearchParams({
+      src,
+      lang: alignLang,
+      cv: progress.via,
+      cm: String(progress.mediaId),
+      cc: String(progress.chapterId),
+    });
+    const check = async () => {
+      if (!live || tries++ >= 60) return;
+      try {
+        const r = await fetch(`/api/subs/align?${q}`);
+        const j = (await r.json()) as { ready?: boolean; seconds?: number; fits?: SubFit[] };
+        if (!live || !r.ok || !j.ready) return;
+        setFits((old) => ({ ...old, ...Object.fromEntries((j.fits ?? []).map((f) => [f.id, f])) }));
+        if (j.fits?.some((f) => f.matched) || (j.seconds ?? 0) >= 540) clearInterval(timer);
+      } catch {
+        /* the unaligned file stays usable, and the manual slider is still there */
+      }
+    };
+    const timer = setInterval(check, 15_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [src, hydrated, subLoading, alignLang, cues.length, progress.chapterId, progress.via, progress.mediaId]);
 
   /* Softsubs inside the torrent become readable as early clusters land — keep
      polling and refresh the growing extract until the file is complete. */
@@ -1026,16 +1118,19 @@ export default function Player({
     };
   }, [activeCue?.url]);
 
+  /* What the audio measured for this file, then the viewer's own nudge on top. */
+  const autoShift = appliedShift(activeCue ? fits[activeCue.id] : undefined);
+
   /* Accurate remux seeks make currentTime relative to `startAt`. */
   useEffect(() => {
     const id = setInterval(() => {
       const currentTime =
         document.querySelector<HTMLVideoElement>(".player-root video")?.currentTime ?? 0;
-      const absolute = remuxEpisodeTime(startAt, currentTime, native.current) - subSync;
+      const absolute = remuxEpisodeTime(startAt, currentTime, native.current) - subSync - autoShift;
       setSubAt((old) => (Math.abs(old - absolute) < 0.04 ? old : absolute));
     }, 80);
     return () => clearInterval(id);
-  }, [src, startAt, subSync]);
+  }, [src, startAt, subSync, autoShift]);
 
   useEffect(() => {
     if (subLang !== "off") lastSub.current = subLang;
@@ -1128,12 +1223,13 @@ export default function Player({
           listedTracks(player.current),
           group?.lang ?? lang,
           pick?.hint,
+          titleLang,
         );
-        if (track === -1) {
+        if (track === -1 && !live) {
           failOver();
           return;
         }
-        if (track != null) player.current?.remoteControl.changeAudioTrack(track);
+        if (track != null && track !== -1) player.current?.remoteControl.changeAudioTrack(track);
         /* No seek: the remux already began at `startAt`, and asking a live pipe
            to seek to a position it is already at only stalls it. */
         /* Only once this episode is safely playing, so warming the next one can
@@ -1151,7 +1247,8 @@ export default function Player({
     >
       <MediaProvider />
       <PlayerGestures />
-      {activeCue && <SubOverlay cues={timed} at={subAt} scale={captionScale} />}
+      {activeCue && !cast.connected && <SubOverlay cues={timed} at={subAt} scale={captionScale} />}
+      {cast.connected && <div className="player-casting" role="status">Playing on TV</div>}
 
       {err ? (
         <div className="player-stage">
@@ -1200,9 +1297,9 @@ export default function Player({
             <span className="mono">Up next{countdown > 0 ? ` · ${countdown}` : ""}</span>
             <b>{nextLabel ?? "Next episode"}</b>
             <div className="acts">
-              <a className="btn primary" href={nextHref}>
+              <Link className="btn primary" href={nextHref}>
                 Play now
-              </a>
+              </Link>
               <button type="button" className="btn" onClick={() => setNextCancelled(true)}>
                 Watch credits
               </button>
@@ -1221,9 +1318,9 @@ export default function Player({
 
       <Controls.Root className="player-controls" hideDelay={2800}>
         <Controls.Group className="reader-bar player-top">
-          <a className="pbtn" href={backHref} aria-label="Back to title">
+          <Link className="pbtn" href={backHref} aria-label="Back to title">
             <Icon d={PATH.arrow} filled={false} />
-          </a>
+          </Link>
           <PlayerMeta
             title={title}
             episodeLabel={episodeLabel}
@@ -1245,9 +1342,11 @@ export default function Player({
 
           <div className="player-row">
             <div className="player-side">
-              <PlayButton className="pbtn">
-                <PlayPause />
-              </PlayButton>
+              {cast.connected ? (
+                <IconBtn onClick={cast.toggle} aria-label={cast.paused ? "Play on TV" : "Pause on TV"}>
+                  <Icon d={cast.paused ? PATH.play : PATH.pause} />
+                </IconBtn>
+              ) : <PlayButton className="pbtn"><PlayPause /></PlayButton>}
               <IconBtn onClick={() => seekBy(-10)} aria-label="Back 10 seconds">
                 <Icon d={PATH.back10} />
               </IconBtn>
@@ -1285,7 +1384,7 @@ export default function Player({
                   if (g) {
                       setLang(g.lang);
                       localStorage.setItem("lacrima-lang", g.lang);
-                      saveSettings({ audio_lang: g.lang });
+                      if (!live) saveSettings({ audio_lang: g.lang });
                     }
                   }}
                   subLang={subLang}
@@ -1297,6 +1396,7 @@ export default function Player({
                     saveSub(choice);
                   }}
                   subSync={subSync}
+                  syncNote={activeCue ? syncText(fits[activeCue.id], Object.keys(fits).length > 0) : null}
                   onSubSync={(n) => {
                     const next = parseSubSync(String(n));
                     setSubSync(next);
@@ -1314,10 +1414,26 @@ export default function Player({
                 <EpisodeDock episodes={episodes} currentId={currentId} progress={progress} />
               )}
               {nextHref && (
-                <a className="pbtn" href={nextHref} aria-label="Next episode">
+                <Link className="pbtn" href={nextHref} aria-label="Next episode">
                   <Icon d={PATH.next} />
-                </a>
+                </Link>
               )}
+              <div className="player-cast">
+                <button type="button" className={`pbtn${cast.connected ? " on" : ""}`} aria-label="Cast to TV" aria-expanded={castMenuOpen} onClick={() => setCastMenuOpen((open) => !open)}>
+                  <Icon d={PATH.cast} filled={false} />
+                </button>
+                {castMenuOpen && <div className="player-cast-menu">
+                  <strong>{cast.connected ? "Playing on TV" : "Cast to TV"}</strong>
+                  {cast.ready ? <>
+                    <label htmlFor="cast-origin">TV reachable Lacrima address</label>
+                    <input id="cast-origin" value={cast.origin} onChange={(event) => cast.saveOrigin(event.target.value)} placeholder="http://192.168.1.224:7345" />
+                    <button type="button" onClick={() => cast.connected ? cast.disconnect() : void cast.connect(resume.current)}>
+                      {cast.connected ? "Disconnect" : "Choose TV"}
+                    </button>
+                  </> : <p>For this HTTP page, use Chrome’s menu → Cast → Cast tab. That mirrors the video and subtitles to your TV.</p>}
+                  {cast.error && <p role="alert">{cast.error}</p>}
+                </div>}
+              </div>
               <PlayerPopOut />
               <PlayerFullscreen player={player} />
             </div>
@@ -1356,6 +1472,15 @@ function PlayerGestures() {
   );
 }
 
+/** What the audio check made of the file on screen, in words; null while there is nothing to say. */
+function syncText(fit: SubFit | undefined, measured: boolean): string | null {
+  if (!measured) return "Checking this file against the audio";
+  if (!fit) return null;
+  if (!fit.matched) return "This file does not line up with the audio. Try another, or adjust it by hand.";
+  const moved = appliedShift(fit);
+  return moved ? `Lined up with the audio, moved ${moved > 0 ? "+" : ""}${Number(moved.toFixed(2))}s` : "Lined up with the audio";
+}
+
 function DockMenu({
   value,
   groups,
@@ -1366,6 +1491,7 @@ function DockMenu({
   subError,
   onPickSub,
   subSync,
+  syncNote,
   onSubSync,
   captionScale,
   onCaptionScale,
@@ -1380,6 +1506,7 @@ function DockMenu({
   subError: string | null;
   onPickSub: (choice: SubChoice) => void;
   subSync: number;
+  syncNote: string | null;
   onSubSync: (n: number) => void;
   captionScale: number;
   onCaptionScale: (n: number) => void;
@@ -1564,6 +1691,7 @@ function DockMenu({
                   onChange={(e) => onSubSync(Number(e.currentTarget.value))}
                 />
               </div>
+              {syncNote && <p className="player-lang-note">{syncNote}</p>}
             </div>
             <div className="player-sub-sync">
               <div className="player-sub-sync-row">
@@ -1603,6 +1731,7 @@ function EpisodeDock({
   progress: ProgressWrite;
 }) {
   const [open, setOpen] = useState(false);
+  const router = useRouter();
   const seasons = dockSeasons(episodes);
   useEffect(() => {
     if (!open) return;
@@ -1656,7 +1785,7 @@ function EpisodeDock({
                           episode: ep.number,
                           skipAhead: true,
                         }).then(() => {
-                          window.location.href = ep.href;
+                          router.push(ep.href);
                         });
                       }}
                     >

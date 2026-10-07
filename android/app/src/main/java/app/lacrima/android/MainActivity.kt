@@ -3,16 +3,16 @@ package app.lacrima.android
 import android.app.PictureInPictureParams
 import android.os.Bundle
 import android.util.Rational
-import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.fragment.app.FragmentActivity
 import app.lacrima.android.ui.LacrimaApp
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private val model by lazy { AppModel(applicationContext) }
     private var immersive = false
 

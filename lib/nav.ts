@@ -1,10 +1,10 @@
+import { KIND_INFO, parseKind } from "./kinds.ts";
 import { windowEpisodes, type Series } from "./series.ts";
 
+/** The top-bar tab a title belongs to: its kind's label, or Home for anything else. */
 export function navTabForKind(kind: string): string {
-  if (kind === "anime") return "Anime";
-  if (kind === "manga") return "Manga";
-  if (kind === "novel") return "Novels";
-  return "Home";
+  const k = parseKind(kind);
+  return k ? KIND_INFO[k].label : "Home";
 }
 
 /**
@@ -43,8 +43,28 @@ export function playHref(via: string, kind: string, id: number, chapterId: strin
   return `/read/${via}/${kind}/${id}/${encodeURIComponent(chapterId)}`;
 }
 
-export function playLabel(kind: string, number: number): string {
+export function playLabel(kind: string, number: number, season?: number | null): string {
+  if (kind === "movie") return "Watch movie";
+  if (kind === "series") return season != null && season > 0 ? `Play S${season}·E${number}` : `Play E${number}`;
   return kind === "anime" ? `Play episode ${number}` : `Read chapter ${number}`;
+}
+
+/**
+ * The entry after `currentId`, or null at the end of the list. A series list runs
+ * season by season, so S1's last episode is followed by S2E1. Specials sit after the
+ * last regular episode and auto-advance must not roll into them. A movie's list is
+ * one entry long, so it has no next.
+ */
+export function nextPlayable<T extends { id: string; season?: number | null }>(
+  kind: string,
+  chapters: T[],
+  currentId: string,
+): T | null {
+  const at = chapters.findIndex((c) => c.id === currentId);
+  const next = at >= 0 ? chapters[at + 1] : undefined;
+  if (!next) return null;
+  if (kind === "series" && chapters[at].season !== 0 && next.season === 0) return null;
+  return next;
 }
 
 export type DockEpisode = {

@@ -1,5 +1,6 @@
 import type { Anchor } from "@/lib/db";
-import type { MediaKind, ProviderSlug } from "@/lib/media";
+import { parseKind } from "@/lib/kinds";
+import { isProviderSlug } from "@/lib/media";
 import { currentProfile } from "@/lib/profile";
 import { setProgressTree } from "@/lib/progress";
 
@@ -7,9 +8,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 type Body = {
-  via?: ProviderSlug;
+  via?: unknown;
   mediaId?: number;
-  kind?: MediaKind;
+  kind?: unknown;
   title?: string;
   cover?: string | null;
   unit?: number;
@@ -30,9 +31,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "Bad JSON" }, { status: 400 });
   }
   const {
-    via,
     mediaId,
-    kind,
     title,
     cover,
     unit,
@@ -44,8 +43,13 @@ export async function POST(req: Request) {
     seriesParts,
     partIndex,
   } = body;
-  if (!via || !kind || !title || mediaId == null || unit == null || !anchor) {
+  if (!body.via || !body.kind || !title || mediaId == null || unit == null || !anchor) {
     return Response.json({ error: "Missing fields" }, { status: 400 });
+  }
+  const via = isProviderSlug(body.via) ? body.via : null;
+  const kind = parseKind(body.kind);
+  if (!via || !kind) {
+    return Response.json({ error: "Unknown provider or kind" }, { status: 400 });
   }
   const me = await currentProfile();
   const parts = (seriesParts ?? [])

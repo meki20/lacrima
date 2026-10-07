@@ -35,9 +35,40 @@ const ALIASES: Record<Lang, string[]> = {
   pt: ["pt", "por", "portuguese", "brazilian"],
   hi: ["hi", "hin", "hindi"],
   ko: ["ko", "kor", "korean"],
-  zh: ["zh", "chi", "zho", "chinese", "mandarin"],
+  zh: ["zh", "chi", "zho", "cmn", "yue", "chinese", "mandarin", "cantonese"],
   ru: ["ru", "rus", "russian"],
 };
+
+/**
+ * The language a title was made in, which is also what a release that names no
+ * language is in.
+ *
+ * Anime is Japanese by definition. A film or show is whatever its provider says,
+ * and English when the provider is silent, because a guess that is wrong only
+ * costs a track pick (`remux` falls back to the file's first), while guessing
+ * Japanese filed Shawshank under "Japanese" and asked ffmpeg for a track it
+ * does not have.
+ */
+export function nativeLang(kind: string | undefined, language?: string | null): Lang {
+  if (kind !== "movie" && kind !== "series") return "ja";
+  const first = language?.split(/[,/;]/)[0]?.trim();
+  return parseLangToken(first) ?? COUNTRY_LANG[first?.toLowerCase() ?? ""] ?? "en";
+}
+
+/**
+ * Cinemeta names a country of origin and no language, so "China" has to mean Mandarin.
+ * A heuristic with a known ceiling (a Belgian film is not French by default); where it
+ * is wrong the label is wrong, but playback is not, because the relay falls back to the
+ * file's first track.
+ */
+const COUNTRY_LANG: Record<string, Lang> = {
+  japan: "ja", china: "zh", "hong kong": "zh", taiwan: "zh", "south korea": "ko", korea: "ko",
+  france: "fr", germany: "de", austria: "de", italy: "it", spain: "es", mexico: "es",
+  argentina: "es", brazil: "pt", portugal: "pt", india: "hi", russia: "ru",
+};
+
+/** `[native, "en"]` without a duplicate: what "dual audio" means for this title. */
+const dual = (native: Lang): Lang[] => [...new Set<Lang>([native, "en"])];
 
 /** Accepts `eng`, `en-US`, `Japanese`, or a stored lang id. */
 export function parseLangToken(raw: string | null | undefined): Lang | undefined {
@@ -141,7 +172,7 @@ function explicitAudioLang(text: string): Lang | null {
 }
 
 /** Languages named on the listing — used to pick an audio track inside a file. */
-export function trackLangs(text: string): Lang[] {
+export function trackLangs(text: string, native: Lang = "ja"): Lang[] {
   const spoken = spokenText(text);
   const explicit = explicitAudioLang(text);
   if (explicit) return [explicit];
@@ -152,24 +183,24 @@ export function trackLangs(text: string): Lang[] {
     : namedLangs(spoken);
 
   if (named.includes("hi") && named.length > 1) return ["hi"];
-  if (DUAL.test(spoken)) return ["ja", "en"];
+  if (DUAL.test(spoken)) return dual(native);
   if (named.includes("ja") && named.includes("en") && named.length === 2) return ["ja", "en"];
   if (named.length > 1 && named.includes("ja") && !named.includes("en")) {
     return named.filter((l) => l !== "ja");
   }
   if (DUB.test(spoken)) return named.length ? named : ["en"];
-  if (SUB.test(spoken)) return ["ja"];
+  if (SUB.test(spoken)) return [native];
   if (multi && /4khdhub/i.test(text) && !namedLangs(spoken).includes("ja")) return ["hi"];
   if (multi && named.length) return named;
-  if (multi) return ["ja", "en"];
-  return named.length ? named : ["ja"];
+  if (multi) return dual(native);
+  return named.length ? named : [native];
 }
 
 /**
  * Which quality × language menu rows a listing belongs in.
  * A file can name several langs but only belong in buckets where it is a fair default.
  */
-export function bucketLangs(text: string): Lang[] {
+export function bucketLangs(text: string, native: Lang = "ja"): Lang[] {
   const spoken = spokenText(text);
   const explicit = explicitAudioLang(text);
   if (explicit) return [explicit];
@@ -191,12 +222,13 @@ export function bucketLangs(text: string): Lang[] {
    * `eng` and `jpn` genuinely serves all three, and saying so is the truth rather
    * than an over-promise.
    */
-  if (DUAL.test(spoken)) return ["ja", "en"];
+  if (DUAL.test(spoken)) return dual(native);
   if (DUB.test(spoken)) return named.length ? named : ["en"];
-  /* "English sub" is Japanese audio; the English is on the subtitle track. */
-  if (SUB.test(spoken)) return ["ja"];
+  /* "English sub" is the title's own audio; the English is on the subtitle track. */
+  if (SUB.test(spoken)) return [native];
+  /* A release that names no language is in the one the title was made in. */
   if (named.length) return named;
-  return multi ? ["ja", "en"] : ["ja"];
+  return multi ? dual(native) : [native];
 }
 
 /** @deprecated alias — use bucketLangs for menus, trackLangs for audio tracks. */
@@ -230,6 +262,7 @@ export function pickAudioTrack(
   tracks: { language?: string; label?: string }[],
   lang: Lang,
   hint = "",
+  native: Lang = "ja",
 ): number | null | -1 {
   if (!tracks.length) return null;
   const labelled = tracks.some((t) => {
@@ -241,7 +274,7 @@ export function pickAudioTrack(
     return i >= 0 ? i : -1;
   }
   if (!hint) return null;
-  const langs = trackLangs(hint);
+  const langs = trackLangs(hint, native);
   if (langs.length === 1) {
     if (langs[0] === lang) return langs[0] === "hi" && tracks.length >= 2 ? 0 : null;
     return -1;

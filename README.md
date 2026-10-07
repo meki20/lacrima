@@ -42,4 +42,12 @@ npm test
 npx tsc --noEmit
 ```
 
+To vet a source before trusting it, `scripts/vet-sources.mjs` asks it the same ten titles every time (films, series, anime; or ten manga; or ten novels) and scores it 0-10 for coverage, whether the answers are alive, and speed:
+
+```bash
+node scripts/vet-sources.mjs https://example.com/manifest.json   # a Stremio addon, installed or not
+node scripts/vet-sources.mjs --installed                         # everything installed (needs a DB snapshot, see the script header)
+node scripts/vet-sources.mjs --kind manga                        # or novel
+```
+
 The Android client lives in [`android/`](android/README.md). Its server contract is documented in [`app/api/v1/`](app/api/v1/README.md).

@@ -29,4 +29,17 @@ the server and are shared with the desktop client.
 HTTPS remains the recommended route, including for a Tailscale deployment. The LAN HTTP route is
 for trusted local networks only.
 
+## Cast to TV
+
+Open a video and tap the Cast icon in the top bar. The TV fetches the video and selected subtitles
+from the Lacrima server, so the TV must be on the same network and able to reach the server's LAN
+HTTP address. Connect the Android app using that LAN address when casting; an Android-only
+`localhost` address or a Tailscale-only hostname will not be reachable from a typical Chromecast.
+Cast requires a Google Cast-compatible TV or Chromecast and Google Play services on the phone.
+
+The web player also has a Cast icon. Chrome's one-click Cast sender requires the web page itself
+to be opened over HTTPS, but the TV-reachable media address entered in the Cast menu may still be
+the server's LAN HTTP origin. On a plain HTTP web page, use Chrome's Cast tab command to mirror
+the player and its subtitles instead.
+
 The client API is documented in `../app/api/v1/README.md`.

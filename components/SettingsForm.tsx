@@ -1,11 +1,39 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { LANGS } from "@/lib/audio";
+import { KIND_INFO, toggleKind } from "@/lib/kinds";
+import { MEDIA_KINDS, type MediaKind } from "@/lib/media";
 import type { Settings } from "@/lib/settings";
 
 export default function SettingsForm({ initial }: { initial: Settings }) {
+  const router = useRouter();
   const [settings, setSettings] = useState(initial);
+  const [kindError, setKindError] = useState("");
+  const saving = useRef(false);
+  // Optimistic, but unlike the selects a failure is reverted and said out loud:
+  // a category that looks hidden and isn't (or the reverse) is worse than a stale font size.
+  const toggle = async (kind: MediaKind) => {
+    if (saving.current) return;
+    const before = settings.hidden_kinds;
+    const next = toggleKind(before, kind);
+    if (next.length === before.length && next.every((k, i) => k === before[i])) return;
+    saving.current = true;
+    setKindError("");
+    setSettings((current) => ({ ...current, hidden_kinds: next }));
+    try {
+      const res = await fetch("/api/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ hidden_kinds: next }) });
+      if (!res.ok) throw new Error(String(res.status));
+      router.refresh();
+    } catch {
+      setSettings((current) => ({ ...current, hidden_kinds: before }));
+      setKindError(`Couldn’t save that change, so ${KIND_INFO[kind].label} is back as it was. Try again.`);
+    } finally {
+      saving.current = false;
+    }
+  };
+  const shown = MEDIA_KINDS.filter((k) => !settings.hidden_kinds.includes(k));
   const save = (patch: Partial<Settings>) => {
     setSettings((current) => ({ ...current, ...patch }));
     void fetch("/api/settings", { method: "PUT", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
@@ -21,6 +49,17 @@ export default function SettingsForm({ initial }: { initial: Settings }) {
       <label>Direction<select value={settings.reader_rtl} onChange={(e) => save({ reader_rtl: Number(e.target.value) })}><option value="1">Right to left</option><option value="0">Left to right</option></select></label>
       <label>Page fit<select value={settings.reader_fit} onChange={(e) => save({ reader_fit: e.target.value as Settings["reader_fit"] })}><option value="height">Height</option><option value="width">Width</option><option value="contain">Screen</option></select></label>
       <label>Page layout<select value={settings.reader_spread} onChange={(e) => save({ reader_spread: e.target.value as Settings["reader_spread"] })}><option value="single">Single page</option><option value="double">Double page</option></select></label>
+    </section>
+    <section className="settings-card kinds-card"><div><h2>Categories</h2><p>Hidden categories disappear from navigation, Home, search and Yours. Titles you already have still open from direct links.</p></div>
+      {MEDIA_KINDS.map((kind) => {
+        const on = !settings.hidden_kinds.includes(kind);
+        const last = on && shown.length === 1;
+        return <label key={kind}>
+          <span className="kind-text"><b>{KIND_INFO[kind].label}</b><small id={`kind-${kind}-sub`}>{last ? "Keep at least one category on" : KIND_INFO[kind].blurb}</small></span>
+          <input type="checkbox" role="switch" checked={on} aria-checked={on} disabled={last} aria-describedby={`kind-${kind}-sub`} onChange={() => void toggle(kind)} />
+        </label>;
+      })}
+      <p className={kindError ? "kinds-note err" : "kinds-note"} role="status" aria-live="polite">{kindError}</p>
     </section>
   </div>;
 }

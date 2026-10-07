@@ -1,4 +1,4 @@
-import type { ProviderSlug } from "@/lib/media";
+import { isProviderSlug } from "@/lib/media";
 import { resolveEmbeddedSubtitles, resolveSubtitles } from "@/lib/sources/stremio";
 import { currentProfile } from "@/lib/profile";
 import { updateSubtitleChoice } from "@/lib/settings";
@@ -9,7 +9,8 @@ export const runtime = "nodejs";
 export async function GET(req: Request) {
   const u = new URL(req.url);
   const chapterId = u.searchParams.get("chapterId");
-  const via = u.searchParams.get("via") ?? undefined;
+  const rawVia = u.searchParams.get("via");
+  const via = isProviderSlug(rawVia) ? rawVia : undefined;
   const mediaId = Number(u.searchParams.get("mediaId"));
   if (!chapterId) {
     return Response.json({ error: "Missing chapterId" }, { status: 400 });
@@ -23,7 +24,7 @@ export async function GET(req: Request) {
     const season = Number(u.searchParams.get("s"));
     const episode = Number(u.searchParams.get("e"));
     const result = await resolveEmbeddedSubtitles(
-      { via: via as ProviderSlug, mediaId, chapterId },
+      { via, mediaId, chapterId },
       {
         ih,
         fileIdx: i != null && i !== "" ? Number(i) : null,
@@ -34,7 +35,7 @@ export async function GET(req: Request) {
     return Response.json({ cues: result.cues, pending: result.pending });
   }
   const r = await resolveSubtitles(chapterId, {
-    via: via as ProviderSlug | undefined,
+    via,
     mediaId: Number.isFinite(mediaId) ? mediaId : undefined,
     fresh: u.searchParams.get("fresh") === "1",
   });
@@ -45,7 +46,7 @@ export async function GET(req: Request) {
 export async function PUT(req: Request) {
   let body: { via?: unknown; mediaId?: unknown; chapterId?: unknown; choice?: unknown };
   try { body = await req.json(); } catch { return Response.json({ error: "Bad json" }, { status: 400 }); }
-  if (!body || typeof body.via !== "string" || !["anilist", "jikan", "kitsu"].includes(body.via) ||
+  if (!body || !isProviderSlug(body.via) ||
     !Number.isSafeInteger(body.mediaId) || Number(body.mediaId) <= 0 ||
     typeof body.chapterId !== "string" || !body.chapterId || body.chapterId.length > 500 ||
     typeof body.choice !== "string" || !body.choice || body.choice.length > 8_000) {

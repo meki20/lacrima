@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { firstPlay, playHref, playLabel } from "@/lib/nav";
 import type { Binding } from "@/lib/match";
 import type { MediaKind } from "@/lib/media";
@@ -26,14 +27,14 @@ export default async function WatchCta({
 }) {
   if (resume) {
     return (
-      <a className="btn primary" href={resume.href}>
+      <Link className="btn primary" href={resume.href}>
         {resume.label}
         {pageLabel ? (
           <span className="mono" style={{ color: "inherit", opacity: 0.7 }}>
             {pageLabel}
           </span>
         ) : null}
-      </a>
+      </Link>
     );
   }
   if (!binding) return null;
@@ -46,8 +47,8 @@ export default async function WatchCta({
   });
   if (!first) return null;
   return (
-    <a className="btn primary" href={playHref(via, kind, id, first.id)}>
-      {playLabel(kind, first.number)}
-    </a>
+    <Link className="btn primary" href={playHref(via, kind, id, first.id)}>
+      {playLabel(kind, first.number, first.season)}
+    </Link>
   );
 }

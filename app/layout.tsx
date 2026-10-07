@@ -11,7 +11,7 @@ const mono = Geist_Mono({ subsets: ["latin"], weight: ["400"], variable: "--geis
 
 export const metadata: Metadata = {
   title: "Lacrima",
-  description: "Anime, manga and novels. One place, everywhere.",
+  description: "Anime, manga, novels, movies and series. One place, everywhere.",
 };
 
 export const viewport: Viewport = {

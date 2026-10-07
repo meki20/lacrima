@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { isVideoKind } from "@/lib/kinds";
 import type { MediaKind } from "@/lib/media";
 
 const closeAll = new EventTarget();
@@ -42,7 +43,7 @@ export default function MarkMenu({
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
-  const word = kind === "anime" ? "watched" : "read";
+  const word = isVideoKind(kind) ? "watched" : "read";
 
   useEffect(() => {
     if (!open) return;

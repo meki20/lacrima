@@ -1,5 +1,6 @@
 import { Err, Ok, type Result } from "./result.ts";
 import type { BrowseData, HomeData, Media, MediaKind, ProviderSlug, SearchData } from "./media.ts";
+import { KIND_INFO } from "./kinds.ts";
 
 export type SeriesPart = {
   id: number;
@@ -126,18 +127,26 @@ function displayName(title: string, key: string): string {
   return name;
 }
 
-/** One tile per franchise. Keeps the shortest title in the group (usually the root). */
+/**
+ * One tile per franchise. Keeps the shortest title in the group (usually the root).
+ * Movies and series have no franchise graph, so "Part 2" and "(2021)" are different
+ * titles there: they pass through untouched, in place.
+ */
 export function collapseSeries(items: Media[]): Media[] {
-  const titles = items.map((m) => m.title);
+  const titles = items.filter((m) => KIND_INFO[m.kind].franchise).map((m) => m.title);
   const groups = new Map<string, Media[]>();
-  for (const m of items) {
-    const k = `${m.kind}|${seriesKey(m.title, titles)}`;
+  items.forEach((m, i) => {
+    const k = KIND_INFO[m.kind].franchise ? `${m.kind}|${seriesKey(m.title, titles)}` : `alone|${i}`;
     const g = groups.get(k);
     if (g) g.push(m);
     else groups.set(k, [m]);
-  }
+  });
   const out: Media[] = [];
   for (const g of groups.values()) {
+    if (!KIND_INFO[g[0]!.kind].franchise) {
+      out.push(g[0]!);
+      continue;
+    }
     const rep = [...g].sort((a, b) => a.title.length - b.title.length)[0]!;
     const key = seriesKey(rep.title, titles);
     const title = displayName(rep.title, key);
@@ -161,6 +170,9 @@ export function collapseSearch(d: SearchData): SearchData {
     anime: collapseSeries(d.anime),
     manga: collapseSeries(d.manga),
     novels: collapseSeries(d.novels),
+    // No franchise graph for live action: "Part 2" and "(2021)" are different titles.
+    movies: d.movies,
+    series: d.series,
   };
 }
 
@@ -417,11 +429,18 @@ function remember(via: ProviderSlug, kind: MediaKind, s: Series) {
   }
 }
 
+/** Only the anime-family providers carry relations to walk. */
+const GRAPH_VIA: readonly ProviderSlug[] = ["anilist", "jikan", "kitsu"];
+
 export async function fetchSeries(
   via: ProviderSlug,
   kind: MediaKind,
   id: number,
 ): Promise<Result<Series>> {
+  // Movies and series have no franchise graph; answer empty without touching the network.
+  if (!KIND_INFO[kind].franchise || !GRAPH_VIA.includes(via)) {
+    return Ok({ rootId: id, title: "", parts: [], specials: [] });
+  }
   const key = `${via}|${kind}|${id}`;
   const hit = memo.get(key);
   if (hit && Date.now() - hit.at < TTL) return Ok(hit.v);
@@ -491,7 +510,9 @@ async function fetchNode(
           ? await anilistNode(id)
           : via === "jikan"
             ? await jikanNode(kind, id)
-            : await kitsuNode(kind, id);
+            : via === "kitsu"
+              ? await kitsuNode(kind, id)
+              : null;
       if (n) return n;
     } catch {
       /* retry once — Jikan 504s mid-walk otherwise truncate the franchise */

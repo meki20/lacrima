@@ -11,6 +11,7 @@ import {
   tapZone,
   type NovelReaderPrefs,
 } from "@/lib/reader-prefs";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import MarkMenu from "./MarkMenu";
 
@@ -288,9 +289,9 @@ export default function NovelReader({
       style={{ ["--novel-size" as string]: `${fontSize}px` }}
     >
       <header className="reader-bar">
-        <a className="pbtn" href={backHref} aria-label="Back to the title" title="Back (Esc)">
+        <Link className="pbtn" href={backHref} aria-label="Back to the title" title="Back (Esc)">
           <Icon d={PATH.back} filled={false} />
-        </a>
+        </Link>
         <div className="reader-id">
           <b>{title}</b>
           <span>
@@ -497,15 +498,16 @@ function Hop({
   side: "prev" | "next";
   chapter: "prev" | "next";
 }) {
-  return (
-    <a
-      className={`pbtn reader-hop ${side}`}
-      href={href ?? undefined}
-      aria-disabled={!href}
-      aria-label={chapter === "prev" ? "Previous chapter" : "Next chapter"}
-      title={chapter === "prev" ? "Previous chapter" : "Next chapter"}
-    >
-      <Icon d={side === "prev" ? PATH.prevCh : PATH.nextCh} />
+  const label = chapter === "prev" ? "Previous chapter" : "Next chapter";
+  const icon = <Icon d={side === "prev" ? PATH.prevCh : PATH.nextCh} />;
+  const className = `pbtn reader-hop ${side}`;
+  return href ? (
+    <Link className={className} href={href} aria-label={label} title={label}>
+      {icon}
+    </Link>
+  ) : (
+    <a className={className} aria-disabled aria-label={label} title={label}>
+      {icon}
     </a>
   );
 }

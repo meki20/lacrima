@@ -25,5 +25,9 @@
 }
 
 :80 {
+	log {
+		output file /tmp/lacrima-cast-access.log
+		format json
+	}
 	import lacrima
 }

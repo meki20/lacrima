@@ -49,6 +49,7 @@ dependencies {
     implementation("androidx.media3:media3-datasource:1.11.0")
     implementation("androidx.media3:media3-ui:1.11.0")
     implementation("androidx.media3:media3-ui-compose-material3:1.11.0")
+    implementation("com.google.android.gms:play-services-cast-framework:22.3.1")
     implementation("io.coil-kt.coil3:coil-compose:3.4.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.4.0")
 

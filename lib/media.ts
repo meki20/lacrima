@@ -1,6 +1,15 @@
-export type MediaKind = "anime" | "manga" | "novel";
+export const MEDIA_KINDS = ["anime", "manga", "novel", "movie", "series"] as const;
+export type MediaKind = (typeof MEDIA_KINDS)[number];
 
-export type ProviderSlug = "anilist" | "jikan" | "kitsu";
+/**
+ * Two TMDB slugs because TMDB movie and tv ids collide, and every repo key is
+ * `(via, media_id)` with no kind in it.
+ */
+export const PROVIDER_SLUGS = ["anilist", "jikan", "kitsu", "tmdb-movie", "tmdb-tv", "cinemeta"] as const;
+export type ProviderSlug = (typeof PROVIDER_SLUGS)[number];
+
+export const isProviderSlug = (v: unknown): v is ProviderSlug =>
+  typeof v === "string" && (PROVIDER_SLUGS as readonly string[]).includes(v);
 
 export type Media = {
   id: number;
@@ -26,8 +35,15 @@ export type Media = {
   /** Typical anime episode/movie runtime. Used by the live remux timeline. */
   unitMinutes?: number | null;
   score: number | null;
+  /** Full IMDb id (`tt0111161`) when the provider knows it; how video sources are addressed. */
+  imdb?: string | null;
+  /** Release year, for disambiguating same-named films and shows. */
+  year?: number | null;
+  /** Original spoken language as the provider names it ("Korean", "ko"); read with `nativeLang`. */
+  language?: string | null;
 };
 
+/** An anime-family provider's home feed. */
 export type HomeData = {
   hero: Media | null;
   popularAnime: Media[];
@@ -36,10 +52,21 @@ export type HomeData = {
   forYou: Media[];
 };
 
+/**
+ * What `fetchHome` serves: the feed plus the movie and series rails, which come from
+ * their own provider chains. An empty rail beside a `failed` kind means that chain died.
+ */
+export type HomePage = HomeData & {
+  popularMovies: Media[];
+  popularSeries: Media[];
+};
+
 export type SearchData = {
   anime: Media[];
   manga: Media[];
   novels: Media[];
+  movies: Media[];
+  series: Media[];
 };
 
 export type BrowseData = {
@@ -74,9 +101,15 @@ export const GENRES = [
 export type Provider = {
   slug: ProviderSlug;
   name: string;
-  fetchHome(genre: string): Promise<import("./result.ts").Result<HomeData>>;
+  /** Kinds this provider can serve; each kind gets its own fallback chain. */
+  kinds: MediaKind[];
+  /** Absent means always on. A keyed provider returns false while its key is unset. */
+  enabled?(): boolean;
+  /** Optional: only the anime-family providers have a combined home feed. */
+  fetchHome?(genre: string): Promise<import("./result.ts").Result<HomeData>>;
   fetchTitle(kind: MediaKind, id: number): Promise<import("./result.ts").Result<Media>>;
-  search(query: string): Promise<import("./result.ts").Result<SearchData>>;
+  /** `kinds` is a hint: a provider whose one call fans out per kind (Cinemeta) skips the ones nobody asked for. */
+  search(query: string, kinds?: readonly MediaKind[]): Promise<import("./result.ts").Result<SearchData>>;
   browse(
     kind: MediaKind,
     genre: string | null,

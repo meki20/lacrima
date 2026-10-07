@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { LibraryItem } from "@/lib/library";
 
@@ -60,10 +61,11 @@ export default function PinnedShelf({ items }: { items: LibraryItem[] }) {
       ) : (
         <div className="yours-pinned" ref={ref}>
           {items.map((m, i) => (
-            <a
+            <Link
+              prefetch={false}
               key={`${m.via}-${m.id}`}
               className="poster"
-              href={mode ? undefined : m.href}
+              href={m.href}
               draggable={mode}
               onDragStart={() => {
                 drag.current = i;
@@ -86,7 +88,7 @@ export default function PinnedShelf({ items }: { items: LibraryItem[] }) {
             >
               {m.cover ? <img src={m.cover} alt="" loading="lazy" decoding="async" /> : null}
               <span className="cap">{m.title}</span>
-            </a>
+            </Link>
           ))}
         </div>
       )}

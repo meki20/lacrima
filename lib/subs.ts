@@ -101,6 +101,21 @@ export function parseCues(text: string): TimedCue[] {
   return /^Dialogue:/m.test(src) ? parseAss(src) : parseBlocks(src);
 }
 
+/** Cast receivers only accept WebVTT; their clock starts at each remux's `t`. */
+export function castVtt(text: string, start = 0): string {
+  const stamp = (seconds: number) => {
+    const ms = Math.round(seconds * 1000);
+    const h = Math.floor(ms / 3_600_000);
+    const m = Math.floor(ms / 60_000) % 60;
+    const s = Math.floor(ms / 1000) % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(ms % 1000).padStart(3, "0")}`;
+  };
+  return "WEBVTT\n\n" + parseCues(text)
+    .filter((cue) => cue.end > start)
+    .map((cue) => `${stamp(Math.max(0, cue.start - start))} --> ${stamp(cue.end - start)}\n${cue.text.replaceAll("-->", "→")}\n`)
+    .join("\n");
+}
+
 /**
  * Cue time for the frame on screen.
  *
@@ -212,23 +227,58 @@ export function parseSubChoice(raw: string | null | undefined): SubChoice | unde
   return raw;
 }
 
-export function cueByChoice(cues: SubCue[], choice: SubChoice): SubCue | null {
+/**
+ * How one subtitle file lines up with the audio that is playing (`lib/sub-align.ts`).
+ * `shift` is the seconds to add to a cue's time to land on its speech. `matched` is
+ * whether the file is this episode's timeline at all: addons return files timed for
+ * other releases, and those correlate with nothing.
+ */
+export type SubFit = { id: string; shift: number; r: number; matched: boolean };
+
+export type SubFits = Record<string, SubFit>;
+
+/** Below this the measurement is within the error of the method; leave the file alone. */
+export const MIN_AUTO_SHIFT = 0.5;
+
+export function appliedShift(fit: SubFit | undefined): number {
+  return fit?.matched && Math.abs(fit.shift) >= MIN_AUTO_SHIFT ? fit.shift : 0;
+}
+
+/** The file of this language that the audio agrees with most; the first listed if none do. */
+function bestOfLang(cues: SubCue[], lang: string, fits: SubFits): SubCue | null {
+  let best: SubCue | null = null;
+  let bestR = -Infinity;
+  for (const c of cues) {
+    if (c.lang !== lang) continue;
+    const fit = fits[c.id];
+    const r = fit?.matched ? fit.r : -1;
+    if (!best || r > bestR) {
+      best = c;
+      bestR = r;
+    }
+  }
+  return best;
+}
+
+export function cueByChoice(cues: SubCue[], choice: SubChoice, fits: SubFits = {}): SubCue | null {
   if (choice === "off") return null;
-  return cues.find((c) => c.id === choice) ?? cues.find((c) => c.lang === choice) ?? null;
+  return cues.find((c) => c.id === choice) ?? bestOfLang(cues, choice, fits);
 }
 
 /**
  * Which subtitle file to turn on.
- * A saved file (or legacy language) wins. Otherwise English on non-English audio.
+ * A saved file wins. A saved language (or none, on non-English audio) takes the
+ * file of that language the audio agrees with, not whichever sorts first.
  */
 export function pickSubLang(
   cues: SubCue[],
   audio: Lang,
   saved?: SubChoice,
+  fits: SubFits = {},
 ): SubChoice {
   if (saved === "off") return "off";
-  const hit = saved ? cueByChoice(cues, saved) : null;
+  const hit = saved ? cueByChoice(cues, saved, fits) : null;
   if (hit) return hit.id;
   if (audio === "en") return "off";
-  return cues.find((c) => c.lang === "en")?.id ?? "off";
+  return bestOfLang(cues, "en", fits)?.id ?? "off";
 }

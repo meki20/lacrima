@@ -13,7 +13,6 @@
 
   /* --accent is overridden per profile at the root; everything derived follows it. */
   --accent: #630E19;
-  --accent-dim: color-mix(in srgb, var(--accent) 16%, transparent);
   --highlight: #e8c56b;
   --warn: #e8c56b;
   --danger: #e5484d;
@@ -28,6 +27,15 @@
   /* next/font supplies --geist-*; the literal names cover the static mockups. */
   --ff: var(--geist-sans, "Geist"), ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
   --ff-mono: var(--geist-mono, "Geist Mono"), ui-monospace, "SF Mono", "Cascadia Mono", monospace;
+}
+
+/* Derived from --accent. The layout sets --accent inline on <body>, and a var() inside a
+   custom property resolves where it is declared, so these must be declared on body too
+   or they stay pinned to the :root default. --accent-fg is the accent as text or a
+   progress fill: the raw accent is ~1.5:1 on the canvas, this lifts it toward --tx. */
+:root, body {
+  --accent-dim: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-fg: color-mix(in srgb, var(--accent) 45%, var(--tx));
 }
 
 * { box-sizing: border-box; }
@@ -81,14 +89,14 @@ h3 { font-size: 14px; }
   background: var(--s1); border: 1px solid var(--border);
   border-radius: var(--r-ctl); color: var(--tx3); font-size: 13px;
 }
-.dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; display: inline-block; }
 .health {
   display: flex; align-items: center; gap: 7px;
   font-family: var(--ff-mono); font-size: 11px; letter-spacing: 0.04em;
   text-transform: uppercase; color: var(--tx3); cursor: pointer;
 }
 .pfp {
-  width: 28px; height: 28px; border-radius: 50%;
+  width: 28px; height: 28px; flex-shrink: 0; border-radius: 50%;
   background: var(--accent); display: grid; place-items: center;
   font-size: 12px; color: #fff; font-weight: 500;
 }
@@ -149,7 +157,12 @@ h3 { font-size: 14px; }
   height: 34px; padding: 0 14px; border-radius: var(--r-ctl);
   background: var(--s2); border: 1px solid var(--border-strong);
   color: var(--tx); font-size: 13px; cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease, opacity 120ms ease;
 }
 .btn.primary { background: var(--highlight); color: #1a1208; border-color: var(--highlight); font-weight: 500; }
-.progress { height: 2px; background: var(--border-strong); border-radius: 2px; overflow: hidden; }
-.progress i { display: block; height: 100%; background: var(--accent); }
+.btn:not(:disabled):hover { background: var(--s3); }
+.btn.primary:not(:disabled):hover { background: color-mix(in srgb, var(--highlight) 94%, white); }
+.btn:not(:disabled):active { transform: translateY(1px); }
+@media (prefers-reduced-motion: reduce) { .btn { transition: none; } .btn:active { transform: none; } }
+.progress { height: 2px; background: color-mix(in srgb, var(--tx) 14%, transparent); border-radius: 2px; overflow: hidden; }
+.progress i { display: block; height: 100%; background: var(--accent-fg); }

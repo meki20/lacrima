@@ -33,6 +33,11 @@ services:
       LACRIMA_H264_ENCODER: ${LACRIMA_H264_ENCODER:-h264_nvenc}
       NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
       # LACRIMA_LANGS: en,all
+      # Optional TMDB key (v3 key or v4 read token) for richer movie and series browsing.
+      # Unset, Cinemeta serves both and nothing breaks (minus the Asian drama chip).
+      LACRIMA_TMDB_KEY: ${LACRIMA_TMDB_KEY:-}
+      # Origin countries behind the Series "Asian drama" chip (TMDB only).
+      # LACRIMA_DRAMA_COUNTRIES: KR,JP,CN,TW,TH
     gpus: all
 
   # The app queues update requests in SQLite; this intentionally separate

@@ -78,6 +78,14 @@ import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.ui.PlayerView
+import androidx.mediarouter.app.MediaRouteButton
+import com.google.android.gms.cast.MediaInfo
+import com.google.android.gms.cast.MediaLoadRequestData
+import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaTrack
+import com.google.android.gms.cast.framework.CastButtonFactory
+import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.CastSession
 import app.lacrima.android.model.ApiResult
 import app.lacrima.android.ui.FadeSlideBar
 import app.lacrima.android.ui.GlassCard
@@ -157,6 +165,7 @@ private fun NativePlayer(
     onPictureInPictureRequested: () -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val castContext = remember { CastContext.getSharedInstance(context) }
     val scope = rememberCoroutineScope()
     val flushScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
     val seekClock = remember { RemuxSeekClock() }
@@ -216,7 +225,7 @@ private fun NativePlayer(
     var ended by remember { mutableStateOf(false) }
     var nextCancelled by remember(document.route) { mutableStateOf(false) }
     var skipSegments by remember(document.route) { mutableStateOf<List<SkipSegment>>(emptyList()) }
-    var subtitles by remember(document.route) { mutableStateOf<List<SubtitleChoice>>(emptyList()) }
+    var sourceSubtitles by remember(document.route) { mutableStateOf<List<SubtitleChoice>>(emptyList()) }
     var subtitleListError by remember(document.route) { mutableStateOf<String?>(null) }
     var subtitleBodyError by remember(document.route) { mutableStateOf<String?>(null) }
     var selectedSubtitle by remember(document.route) { mutableStateOf<SubtitleChoice?>(null) }
@@ -229,9 +238,18 @@ private fun NativePlayer(
     var playedMs by remember(document.route) { mutableLongStateOf(0) }
     var pendingWatchMs by remember(document.route) { mutableLongStateOf(0) }
     var dragPosition by remember { mutableStateOf<Long?>(null) }
+    var castSession by remember { mutableStateOf<CastSession?>(null) }
+    var castStartMs by remember { mutableLongStateOf(0) }
+    var castReload by remember { mutableIntStateOf(0) }
+    var castRequestedMs by remember { mutableStateOf<Long?>(null) }
+    var castMediaUrl by remember { mutableStateOf<String?>(null) }
+    var castError by remember { mutableStateOf<String?>(null) }
 
     val group = document.streamGroups.getOrNull(groupIndex)
     val attempt = group?.attempts?.getOrNull(attemptIndex)
+    var embeddedSubtitles by remember(document.route, attempt?.url) { mutableStateOf<List<SubtitleChoice>>(emptyList()) }
+    val subtitles = mergeSubtitles(sourceSubtitles, embeddedSubtitles)
+    val castSubtitle = if (subtitleOff) null else subtitles.find { it.id == selectedSubtitle?.id } ?: selectedSubtitle
 
     fun reloadAt(
         targetMs: Long,
@@ -275,7 +293,36 @@ private fun NativePlayer(
         }
     }
 
+    LaunchedEffect(castContext) {
+        while (true) {
+            val previous = castSession
+            val session = castContext.sessionManager.currentCastSession
+                ?.takeIf { it.isConnected && it.remoteMediaClient != null }
+            if (previous !== session) {
+                castSession = session
+                if (session == null && previous != null) {
+                    castRequestedMs = null
+                    castMediaUrl = null
+                    reloadAt(positionMs)
+                }
+            }
+            session?.remoteMediaClient?.let { remote ->
+                if (castRequestedMs == null && remote.hasMediaSession() && remote.mediaInfo?.contentId == castMediaUrl) {
+                    positionMs = castStartMs + remote.approximateStreamPosition.coerceAtLeast(0)
+                    isPlaying = remote.isPlaying
+                }
+            }
+            delay(500)
+        }
+    }
+
     fun seekAbsolute(targetMs: Long) {
+        if (castSession != null) {
+            positionMs = targetMs.coerceAtLeast(0)
+            castRequestedMs = positionMs
+            castReload++
+            return
+        }
         val memoryEnd = remuxBufferedEndMs(
             streamStartMs = streamStartMs,
             currentPositionMs = player.currentPosition,
@@ -346,11 +393,57 @@ private fun NativePlayer(
     LaunchedEffect(Unit) { onFullscreenChanged(true) }
 
     LaunchedEffect(streamUrl) {
-        if (streamUrl == null) return@LaunchedEffect
+        if (streamUrl == null || castSession != null) return@LaunchedEffect
         seekClock.reset(remuxDurationUs(document.durationMs, streamStartMs))
         player.setMediaItem(MediaItem.fromUri(streamUrl))
         player.prepare()
         player.playWhenReady = true
+    }
+
+    LaunchedEffect(castSession, castReload, document.route, attempt?.url, castSubtitle?.src, subtitleOff) {
+        val session = castSession ?: return@LaunchedEffect
+        val selected = attempt ?: return@LaunchedEffect
+        player.pause()
+        castError = null
+        castStartMs = castRequestedMs ?: positionMs
+        val requestedUrl = castStreamUrl(selected.url, castStartMs)
+        castMediaUrl = requestedUrl
+        val requestNumber = castReload
+        val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_TV_SHOW).apply {
+            putString(MediaMetadata.KEY_TITLE, document.media.title)
+            putString(MediaMetadata.KEY_SUBTITLE, episodeLabel(document.episode))
+        }
+        val track = castSubtitle?.let {
+            MediaTrack.Builder(1, MediaTrack.TYPE_TEXT)
+                .setName(it.label)
+                .setSubtype(MediaTrack.SUBTYPE_SUBTITLES)
+                .setContentId(castSubtitleUrl(it.src, castStartMs))
+                .setContentType("text/vtt")
+                .setLanguage(it.lang)
+                .build()
+        }
+        val media = MediaInfo.Builder(requestedUrl)
+            .setContentType("application/x-mpegURL")
+            .setStreamType(MediaInfo.STREAM_TYPE_LIVE)
+            .setMetadata(metadata)
+            .setMediaTracks(listOfNotNull(track))
+            .build()
+        val remote = session.remoteMediaClient ?: run {
+            castError = "Could not control this Cast device."
+            return@LaunchedEffect
+        }
+        remote.load(
+            MediaLoadRequestData.Builder()
+                .setMediaInfo(media)
+                .setCurrentTime(0)
+                .setActiveTrackIds(if (track == null) longArrayOf() else longArrayOf(1))
+                .build(),
+        ).setResultCallback { result ->
+            if (requestNumber == castReload) {
+                castRequestedMs = null
+                if (!result.status.isSuccess) castError = "TV playback failed (${result.status.statusCode}). Check that your TV can reach the Lacrima server."
+            }
+        }
     }
 
     LaunchedEffect(attempt?.url) {
@@ -383,7 +476,7 @@ private fun NativePlayer(
         player.addListener(listener)
         onDispose {
             player.removeListener(listener)
-            val absolute = streamStartMs + player.currentPosition.coerceAtLeast(0)
+            val absolute = if (castSession != null) positionMs else streamStartMs + player.currentPosition.coerceAtLeast(0)
             val delta = (pendingWatchMs / 1000).toInt().coerceIn(0, 30)
             flushScope.launch { api.writeProgress(document.progress, absolute, delta) }
             player.release()
@@ -395,12 +488,29 @@ private fun NativePlayer(
         when (val result = withContext(Dispatchers.IO) { api.subtitles(document.route) }) {
             is ApiResult.Failure -> subtitleListError = result.message
             is ApiResult.Success -> {
-                subtitles = result.data
+                sourceSubtitles = result.data
                 subtitleListError = null
                 val pick = pickSubLang(result.data, group?.lang ?: document.settings.audioLang, document.settings.subtitleLang)
                 subtitleOff = pick == "off"
                 selectedSubtitle = result.data.find { it.id == pick }
             }
+        }
+    }
+
+    /* The web player probes this same route every five seconds. It is intentionally
+       quiet: external subtitles remain usable while a torrent has no extract yet. */
+    LaunchedEffect(document.route, attempt?.url) {
+        val stream = attempt ?: return@LaunchedEffect
+        val wanted = if (document.settings.subtitleLang != "off" && group?.lang != "en") "en" else return@LaunchedEffect
+        repeat(360) {
+            when (val result = withContext(Dispatchers.IO) { api.embeddedSubtitles(document.route, stream.url) }) {
+                is ApiResult.Success -> {
+                    if (result.data.cues.isNotEmpty()) embeddedSubtitles = mergeSubtitles(embeddedSubtitles, result.data.cues)
+                    if (!result.data.pending && result.data.cues.any { it.lang == wanted }) return@LaunchedEffect
+                }
+                is ApiResult.Failure -> Unit
+            }
+            delay(5_000)
         }
     }
 
@@ -433,12 +543,13 @@ private fun NativePlayer(
             val now = System.currentTimeMillis()
             val elapsed = (now - lastWall).coerceIn(0, 2_000)
             lastWall = now
-            if (player.isPlaying && player.currentPosition > 200) {
+            if (isPlaying && positionMs > 200) {
                 playedMs += elapsed
                 pendingWatchMs += elapsed
             }
-            positionMs = streamStartMs + player.currentPosition.coerceAtLeast(0)
-            bufferedEndMs = max(
+            if (castSession == null) {
+                positionMs = streamStartMs + player.currentPosition.coerceAtLeast(0)
+                bufferedEndMs = max(
                 remuxBufferedEndMs(
                     streamStartMs,
                     player.currentPosition,
@@ -446,7 +557,8 @@ private fun NativePlayer(
                     player.totalBufferedDuration,
                 ),
                 streamStartMs + seekClock.cachedEndUs() / 1_000,
-            )
+                )
+            }
             if (now - lastWrite >= 5_000 && positionMs > 1_000) {
                 val delta = (pendingWatchMs / 1000).toInt().coerceIn(0, 30)
                 if (delta > 0) pendingWatchMs -= delta * 1000L
@@ -518,7 +630,7 @@ private fun NativePlayer(
             modifier = Modifier.fillMaxSize(),
         )
 
-        if (loading || player.playbackState == Player.STATE_BUFFERING) {
+        if (castSession == null && (loading || player.playbackState == Player.STATE_BUFFERING)) {
             CircularProgressIndicator(Modifier.align(Alignment.Center), color = Highlight)
         }
         error?.let { message ->
@@ -531,6 +643,11 @@ private fun NativePlayer(
                         OutlinedButton(onClick = onBack) { Text("Back") }
                     }
                 }
+            }
+        }
+        castError?.let { message ->
+            GlassCard(Modifier.align(Alignment.Center).padding(24.dp)) {
+                Text(message, Modifier.padding(20.dp), color = Text)
             }
         }
         if (showNextUp) {
@@ -557,7 +674,7 @@ private fun NativePlayer(
             ) { Text("Skip ${skipLabel(segment)}") }
         }
 
-        activeCue?.let { cue ->
+        if (castSession == null) activeCue?.let { cue ->
             PlayerCaption(
                 text = cue.text,
                 scale = captionScale,
@@ -565,6 +682,12 @@ private fun NativePlayer(
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
+        if (castSession != null) Text(
+            "Playing on TV",
+            Modifier.align(Alignment.Center),
+            color = Text,
+            fontSize = 18.sp,
+        )
 
         val chromeOn = controlsVisible || dockOpen || episodesOpen
         FadeSlideBar(visible = chromeOn, fromTop = true, modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
@@ -585,6 +708,15 @@ private fun NativePlayer(
                 attempt?.provider?.let {
                     Text(it, color = Text2, fontSize = 11.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, modifier = Modifier.padding(end = 4.dp))
                 }
+                AndroidView(
+                    factory = { ctx ->
+                        MediaRouteButton(ctx).apply {
+                            contentDescription = "Cast to TV"
+                            CastButtonFactory.setUpMediaRouteButton(ctx, this)
+                        }
+                    },
+                    modifier = Modifier.padding(end = 4.dp),
+                )
                 IconHit(onClick = onPictureInPictureRequested, label = "Picture in picture") {
                     LacrimaIcon(Glyph.pip, filled = false, tint = Color.White)
                 }
@@ -621,7 +753,11 @@ private fun NativePlayer(
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconHit(onClick = { if (player.isPlaying) player.pause() else player.play() }, label = if (isPlaying) "Pause" else "Play") {
+                    IconHit(onClick = {
+                        val remote = castSession?.remoteMediaClient
+                        if (remote != null) { if (remote.isPlaying) remote.pause() else remote.play() }
+                        else { if (player.isPlaying) player.pause() else player.play() }
+                    }, label = if (isPlaying) "Pause" else "Play") {
                         LacrimaIcon(if (isPlaying) Glyph.pause else Glyph.play, filled = true, tint = Color.White, size = 26.dp)
                     }
                     IconHit(onClick = { seekAbsolute(positionMs - 10_000) }, label = "Back 10 seconds") {
@@ -707,7 +843,7 @@ private fun NativePlayer(
                         when (val result = withContext(Dispatchers.IO) { api.subtitles(document.route, fresh = true) }) {
                             is ApiResult.Failure -> subtitleListError = result.message
                             is ApiResult.Success -> {
-                                subtitles = result.data
+                                sourceSubtitles = result.data
                                 subtitleListError = null
                                 subtitleBodyError = null
                             }

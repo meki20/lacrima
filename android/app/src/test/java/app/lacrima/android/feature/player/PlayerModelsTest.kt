@@ -32,6 +32,19 @@ class PlayerModelsTest {
         assertFalse(needsH264Fallback("ERROR_CODE_IO_BAD_HTTP_STATUS"))
     }
 
+    @Test fun `cast URLs keep the HTTP relay and shift the subtitle clock`() {
+        val castUrl = castStreamUrl("http://192.168.1.2:7345/api/stream?ih=aa&ih=bb&remux=1&pack=ts&t=20", 180_500)
+        assertEquals("http://192.168.1.2:7345/api/cast", castUrl.substringBefore('?'))
+        assertEquals(
+            "http://192.168.1.2:7345/api/stream?ih=aa&ih=bb&remux=1&pack=ts&video=h264&t=180.5",
+            java.net.URLDecoder.decode(castUrl.substringAfter("src="), "UTF-8"),
+        )
+        assertEquals(
+            "http://192.168.1.2:7345/api/subs/file?url=embedded%3A2&cast=1&t=180.5",
+            castSubtitleUrl("http://192.168.1.2:7345/api/subs/file?url=embedded%3A2", 180_500),
+        )
+    }
+
     @Test fun `start deadline matches the web player`() {
         assertEquals(12_000L, startDeadlineMs("/api/stream?ih=aa&ih=bb&try=1"))
         assertEquals(45_000L, startDeadlineMs("/api/stream?ih=aa&ih=bb"))
@@ -121,5 +134,14 @@ class PlayerModelsTest {
         assertEquals("off", pickSubLang(cues, "en", null))
         assertEquals("off", pickSubLang(cues, "ja", "off"))
         assertEquals("it", pickSubLang(cues, "ja", "it"))
+    }
+
+    @Test fun `embedded subtitle refreshes replace only their matching track`() {
+        val external = SubtitleChoice("external-en", "en", "English", "https://x/external.srt", "srt")
+        val partial = SubtitleChoice("embedded:2:en", "en", "English · Embedded · downloading", "embedded:0:2.srt", "srt")
+        val full = partial.copy(label = "English · Embedded", url = "embedded:full:2.srt")
+        assertEquals(listOf(external, partial), mergeSubtitles(listOf(external), listOf(partial)))
+        assertEquals(listOf(external, full), mergeSubtitles(listOf(external, partial), listOf(full)))
+        assertEquals(listOf(full), mergeSubtitles(emptyList(), listOf(full)))
     }
 }

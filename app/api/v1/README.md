@@ -100,7 +100,11 @@ Metadata artwork is already an absolute HTTPS URL.
 ## Source administration
 
 - `GET /api/v1/sources/health`
-- `GET /api/v1/sources?kind=` and `PATCH /api/v1/sources` (`{kind,id,enabled}`)
+- `GET /api/v1/sources?kind=` and `PATCH /api/v1/sources` (`{kind,id,enabled}`). Each source carries
+  `vet`: `{state, score?, tone?, tip}` where `state` is `ok` (scored 0-10), `pending`, `unsure`
+  (could not be judged, e.g. rate-limited), `na` (nothing to vet) or `none`.
+- `POST /api/v1/sources/vet` (`{kind,id}`) — vet one source again; answers 202 and the score arrives
+  in `GET /sources`. Every source is vetted once on its own; only that first vet may switch it off (at 5 or below).
 - `GET|POST|DELETE /api/v1/sources/repos` (`kind` query for GET; `{kind,indexUrl}` otherwise)
 - `POST /api/v1/sources/repos/refresh` (`{kind}`)
 - `GET /api/v1/sources/extensions?kind=&q=&limit=` and

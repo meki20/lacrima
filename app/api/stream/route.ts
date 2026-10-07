@@ -5,9 +5,11 @@ import { isIP } from "node:net";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { PLAYLIST_TYPE, isPlaylist, rewritePlaylist } from "@/lib/hls";
+import { castOrigin } from "@/lib/cast-origin";
 import { mimeForPath, playableType, readFileRange } from "@/lib/local-video";
 import { parseLang, parseLangToken, type Lang } from "@/lib/audio";
-import { probeAudio, probeSubtitleTracks, remuxStream, selfRelayUrl } from "@/lib/remux";
+import { aliasCount, probeAudio, probeSubtitleTracks, remuxStream, selfRelayUrl } from "@/lib/remux";
+import { prepareTap } from "@/lib/sub-align";
 import {
   adoptCompleted,
   cachedFileStat,
@@ -336,6 +338,9 @@ async function pumpHttp(
   }
 }
 
+/** How long one direct link may take to deliver its first byte inside a mixed race. */
+const HTTP_LINK_MS = 6_000;
+
 /** HTTP lane for a mixed race: resolve once the upstream body delivers its first chunk. */
 async function httpUntilFirstByte(
   req: Request,
@@ -420,6 +425,7 @@ async function fromMixedRace(
   referer: string | null,
   pairs: { ih: string; fileIdx: number | null }[],
   ctx: CacheCtx | null,
+  alts: { raw: string; referer: string | null }[] = [],
 ) {
   for (const { ih } of pairs) {
     if (!isInfoHash(ih)) return new Response("Bad info hash", { status: 400 });
@@ -473,7 +479,35 @@ async function fromMixedRace(
         resolve(response);
       };
 
-      void httpUntilFirstByte(req, raw, referer, ctx, laneAbort.signal, replace)
+      /* The direct links are one lane, walked in rank order. Racing only the first meant
+         a dead one (a Sootio 403 answers in 120ms) left the lane over and the torrents
+         alone against a thin swarm, while working links sat unused as "alternates" that
+         were only tried after the whole race had failed — 20s to start what a sibling
+         link starts in under one. Each link gets its own first-byte budget so a hung one
+         cannot hold the rest up; it is cleared at first byte, so the stream is unbounded. */
+      void (async () => {
+        let last: unknown = new Error("No HTTP link had data");
+        for (const link of [{ raw, referer }, ...alts]) {
+          if (settled || laneAbort.signal.aborted) break;
+          const budget = new AbortController();
+          const timer = setTimeout(() => budget.abort(), HTTP_LINK_MS);
+          try {
+            return await httpUntilFirstByte(
+              req,
+              link.raw,
+              link.referer,
+              ctx,
+              mergeAbort(laneAbort.signal, budget.signal),
+              replace,
+            );
+          } catch (e) {
+            last = e;
+          } finally {
+            clearTimeout(timer);
+          }
+        }
+        throw last;
+      })()
         .then((r) => win(r, true))
         .catch(lose);
 
@@ -599,7 +633,12 @@ async function fromRemux(req: Request, u: URL): Promise<Response> {
   const seek = Math.max(0, Number(u.searchParams.get("t") ?? 0) || 0);
   const tryN = Math.max(0, Number(u.searchParams.get("try") ?? 0) || 0);
   const alternatives = inner.searchParams.getAll("alt");
-  inner.searchParams.delete("alt");
+  /* A film or show picks its audio on a best-effort basis. Its releases mostly carry
+     one track tagged `und` (or `fre` for `fra`), which no `-map language` selects and
+     ffmpeg aborts on, so a strict match turned nearly every movie into a 502. Anime
+     keeps the strict match: a dub-only file in the Japanese group is a wrong pick. */
+  const origin = parseCacheCtx(inner.searchParams);
+  const lenient = Boolean(origin && (origin.via === "cinemeta" || origin.via.startsWith("tmdb")));
   const candidates: URL[] = [];
   /* HTTP files are probed for the requested audio, then the mixed URL is remuxed
      so torrents can still win. A warm `try=` is already a torrent from that race. */
@@ -607,6 +646,7 @@ async function fromRemux(req: Request, u: URL): Promise<Response> {
   for (const rawAlt of alternatives) {
     const alt = new URL(rawAlt, "http://lacrima.local");
     const candidate = new URL(inner);
+    candidate.searchParams.delete("alt");
     candidate.searchParams.delete("ih");
     candidate.searchParams.delete("i");
     for (const key of ["cv", "cm", "cc"]) candidate.searchParams.delete(key);
@@ -617,9 +657,11 @@ async function fromRemux(req: Request, u: URL): Promise<Response> {
     }
     if (candidate.searchParams.has("url")) candidates.push(candidate);
   }
-  if (lang && inner.searchParams.has("ih")) {
+  /* The torrent-only fallback for a mixed race. Without a direct link to strip it is the
+     same request again, and against a dead swarm that doubled the wait to give up. */
+  if (lang && inner.searchParams.has("ih") && inner.searchParams.has("url")) {
     const torrent = new URL(inner);
-    for (const key of ["url", "referer", "hls"]) torrent.searchParams.delete(key);
+    for (const key of ["url", "referer", "hls", "alt"]) torrent.searchParams.delete(key);
     if (!subtitle) for (const key of ["cv", "cm", "cc"]) torrent.searchParams.delete(key);
     candidates.push(torrent);
   }
@@ -675,70 +717,97 @@ async function fromRemux(req: Request, u: URL): Promise<Response> {
       lang && tryN === 0 && (local || candidate.searchParams.has("url"))
         ? await probeAudio(probeUrl, lang, local ? null : candidateReferer, req.signal)
         : undefined;
-    if (tryN === 0 && lang && candidate.searchParams.has("url") && !local && probedAudio == null) {
+    if (
+      tryN === 0 &&
+      lang &&
+      candidate.searchParams.has("url") &&
+      !local &&
+      probedAudio == null &&
+      !lenient
+    ) {
       lastError = `This source has no ${lang} audio track`;
       continue;
     }
-    const raw = remuxStream(
-      input,
-      {
-        lang,
-        /* A mixed race may be won by a different file than the HTTP source we
-           probed. Its numeric stream indexes and codecs are unrelated, so let
-           ffmpeg select the requested language from the actual winner and
-           normalize that winner's audio. */
-        audioIndex: mixed ? undefined : probedAudio?.index,
-        copyAudio: mixed ? false : probedAudio?.copyAudio,
-        seek,
-        referer: local ? null : candidateReferer,
-        pack,
-        transcodeVideo,
-      },
-      req.signal,
-    );
-    const reader = raw.getReader();
-    try {
-      const first = await reader.read();
-      if (first.done || !first.value.byteLength) throw new Error("ffmpeg returned no video");
-      let initial: Uint8Array | null = first.value;
-      let cancelled = false;
-      const body = new ReadableStream<Uint8Array>({
-        async pull(controller) {
-          if (cancelled) return;
-          if (initial) {
-            controller.enqueue(initial);
-            initial = null;
-            return;
-          }
-          const next = await reader.read();
-          if (cancelled) return;
-          if (next.done) controller.close();
-          else controller.enqueue(next.value);
+    const attempt = async (want: Lang | undefined, alias: number): Promise<Response> => {
+      const raw = remuxStream(
+        input,
+        {
+          lang: want,
+          alias,
+          /* A mixed race may be won by a different file than the HTTP source we
+             probed. Its numeric stream indexes and codecs are unrelated, so let
+             ffmpeg select the requested language from the actual winner and
+             normalize that winner's audio. */
+          audioIndex: mixed || !want ? undefined : probedAudio?.index,
+          copyAudio: mixed || !want ? false : probedAudio?.copyAudio,
+          seek,
+          referer: local ? null : candidateReferer,
+          pack,
+          transcodeVideo,
+          /* Web only: the native player's TS pipe has no subtitle aligner behind it yet. */
+          tap: pack ? undefined : prepareTap(u.pathname + u.search),
         },
-        cancel() {
-          cancelled = true;
-          return reader.cancel();
-        },
-      });
-      return new Response(body, {
-        status: 200,
-        headers: {
-          "content-type": pack === "ts" ? "video/mp2t" : "video/mp4",
-          "cache-control": "no-store",
-          /* Say so explicitly: a live pipe cannot answer a byte range, and a player
-             that believes otherwise will ask for one and stall. */
-          "accept-ranges": "none",
-        },
-      });
-    } catch (e) {
-      lastError = e instanceof Error ? e.message : "Remux failed";
-      await reader.cancel().catch(() => undefined);
+        req.signal,
+      );
+      const reader = raw.getReader();
+      try {
+        const first = await reader.read();
+        if (first.done || !first.value.byteLength) throw new Error("ffmpeg returned no video");
+        let initial: Uint8Array | null = first.value;
+        let cancelled = false;
+        const body = new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            if (cancelled) return;
+            if (initial) {
+              controller.enqueue(initial);
+              initial = null;
+              return;
+            }
+            const next = await reader.read();
+            if (cancelled) return;
+            if (next.done) controller.close();
+            else controller.enqueue(next.value);
+          },
+          cancel() {
+            cancelled = true;
+            return reader.cancel();
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: {
+            "content-type": pack === "ts" ? "video/mp2t" : "video/mp4",
+            "cache-control": "no-store",
+            /* Say so explicitly: a live pipe cannot answer a byte range, and a player
+               that believes otherwise will ask for one and stall. */
+            "accept-ranges": "none",
+          },
+        });
+      } catch (e) {
+        await reader.cancel().catch(() => undefined);
+        throw e;
+      }
+    };
+    /* Each spelling of the language's tag in turn, then (films and shows only) whatever
+       track the file leads with. Only "that tag is not in this file" moves on to the
+       next; any other failure is the source's and ends the candidate. */
+    const tries: [Lang | undefined, number][] = lang
+      ? Array.from({ length: aliasCount(lang) }, (_, alias): [Lang, number] => [lang, alias])
+      : [[undefined, 0]];
+    if (lenient && lang) tries.push([undefined, 0]);
+    for (const [want, alias] of tries) {
+      try {
+        return await attempt(want, alias);
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : "Remux failed";
+        if (!/matches no streams/i.test(lastError)) break;
+      }
     }
   }
   return new Response(lastError, { status: 502 });
 }
 
-export async function GET(req: Request) {
+async function stream(req: Request) {
   const u = new URL(req.url);
   if (u.searchParams.get("remux") === "1") return fromRemux(req, u);
   const ctx = parseCacheCtx(u.searchParams);
@@ -750,7 +819,13 @@ export async function GET(req: Request) {
       ih,
       fileIdx: idxs[n] == null || idxs[n] === "" ? null : Number(idxs[n]),
     }));
-    return fromMixedRace(req, raw, u.searchParams.get("referer"), pairs, ctx);
+    /* `alt` carries relay-form links; HLS ones need playlist rewriting and cannot race. */
+    const alts = u.searchParams.getAll("alt").flatMap((a) => {
+      const alt = new URL(a, "http://lacrima.local").searchParams;
+      const link = alt.get("url");
+      return link && alt.get("hls") !== "1" ? [{ raw: link, referer: alt.get("referer") }] : [];
+    });
+    return fromMixedRace(req, raw, u.searchParams.get("referer"), pairs, ctx, alts);
   }
   if (ihs.length > 1) {
     const idxs = u.searchParams.getAll("i");
@@ -763,6 +838,33 @@ export async function GET(req: Request) {
   if (ihs.length === 1) return fromTorrent(req, ihs[0], u.searchParams.get("i"), ctx);
   if (raw) return fromHttp(req, raw, u.searchParams.get("referer"), ctx);
   return new Response("Missing url", { status: 400 });
+}
+
+/** The default Cast receiver fetches both video and text tracks across origins. */
+export async function GET(req: Request) {
+  const response = await stream(req);
+  const origin = castOrigin(req);
+  if (origin) {
+    response.headers.set("access-control-allow-origin", origin);
+    response.headers.set("access-control-allow-headers", "Range, Accept-Encoding, Content-Type");
+    response.headers.set("access-control-expose-headers", "Content-Range, Accept-Ranges, Content-Length");
+    response.headers.set("vary", "Origin");
+  }
+  return response;
+}
+
+export function OPTIONS(req: Request) {
+  const origin = castOrigin(req);
+  if (!origin) return new Response(null, { status: 403 });
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "access-control-allow-origin": origin,
+      "access-control-allow-methods": "GET, HEAD, OPTIONS",
+      "access-control-allow-headers": "Range, Accept-Encoding, Content-Type",
+      "vary": "Origin",
+    },
+  });
 }
 
 export async function DELETE() {

@@ -1,5 +1,6 @@
 import { db, plainAll } from "./db.ts";
-import type { MediaKind } from "./media.ts";
+import { MEDIA_KINDS, type MediaKind } from "./media.ts";
+import { isVideoKind, KIND_INFO } from "./kinds.ts";
 import type { LibraryItem } from "./library.ts";
 
 export function activityDay(at = Date.now()): string {
@@ -20,18 +21,22 @@ export function markActivity(
   const anime = bump.unit && kind === "anime" ? 1 : 0;
   const manga = bump.unit && kind === "manga" ? 1 : 0;
   const novel = bump.unit && kind === "novel" ? 1 : 0;
+  const movie = bump.unit && kind === "movie" ? 1 : 0;
+  const series = bump.unit && kind === "series" ? 1 : 0;
   const night = bump.unit && bump.night ? 1 : 0;
   db()
     .prepare(
-      `insert into activity (profile_id, day, anime, manga, novel, night)
-       values (?, ?, ?, ?, ?, ?)
+      `insert into activity (profile_id, day, anime, manga, novel, movie, series, night)
+       values (?, ?, ?, ?, ?, ?, ?, ?)
        on conflict(profile_id, day) do update set
          anime = anime + excluded.anime,
          manga = manga + excluded.manga,
          novel = novel + excluded.novel,
+         movie = movie + excluded.movie,
+         series = series + excluded.series,
          night = night + excluded.night`,
     )
-    .run(profileId, day, anime, manga, novel, night);
+    .run(profileId, day, anime, manga, novel, movie, series, night);
 }
 
 export function streakDays(days: string[], today = activityDay()): number {
@@ -53,13 +58,18 @@ export function shiftDay(day: string, delta: number): string {
 
 export type MixShare = { kind: MediaKind; label: string; n: number; pct: number };
 
-export function mixShares(counts: Record<MediaKind, number>): MixShare[] {
-  const total = counts.anime + counts.manga + counts.novel;
-  const rows: MixShare[] = [
-    { kind: "manga", label: "Manga", n: counts.manga, pct: 0 },
-    { kind: "anime", label: "Anime", n: counts.anime, pct: 0 },
-    { kind: "novel", label: "Novels", n: counts.novel, pct: 0 },
-  ];
+export function mixShares(
+  counts: Partial<Record<MediaKind, number>>,
+  kinds: readonly MediaKind[] = MEDIA_KINDS,
+): MixShare[] {
+  // A hidden category has no row and no share of the total.
+  const n = (kind: MediaKind) => (kinds.includes(kind) ? (counts[kind] ?? 0) : 0);
+  const total = n("anime") + n("manga") + n("novel") + n("movie") + n("series");
+  // Movies and series only get a row once there is something in them, so the
+  // mix looks the same as before until a profile actually watches one.
+  const rows: MixShare[] = (["manga", "anime", "novel", "movie", "series"] as const)
+    .filter((kind, i) => kinds.includes(kind) && (i < 3 || n(kind) > 0))
+    .map((kind) => ({ kind, label: KIND_INFO[kind].label, n: n(kind), pct: 0 }));
   if (!total) return rows;
   return rows.map((r) => ({ ...r, pct: Math.round((r.n / total) * 100) }));
 }
@@ -90,10 +100,10 @@ export function collectFacts(
   activity: { day: string; anime: number; manga: number; novel: number; night: number }[],
 ): ProfileFacts {
   const chapters = progress
-    .filter((p) => p.media_type !== "anime")
+    .filter((p) => !isVideoKind(p.media_type))
     .reduce((n, p) => n + Math.max(0, p.unit), 0);
   const episodes = progress
-    .filter((p) => p.media_type === "anime")
+    .filter((p) => isVideoKind(p.media_type))
     .reduce((n, p) => n + Math.max(0, p.unit), 0);
   const watchedSeconds = progress.reduce((n, p) => n + Math.max(0, p.watched_seconds ?? 0), 0);
   return {
@@ -110,13 +120,15 @@ export function loadActivity(profileId: number) {
   return plainAll(
     db()
       .prepare(
-        "select day, anime, manga, novel, night from activity where profile_id = ? order by day desc",
+        "select day, anime, manga, novel, movie, series, night from activity where profile_id = ? order by day desc",
       )
       .all(profileId) as {
       day: string;
       anime: number;
       manga: number;
       novel: number;
+      movie: number;
+      series: number;
       night: number;
     }[],
   );
@@ -135,17 +147,20 @@ export function loadProgress(profileId: number): {
 }
 
 export function monthMix(
-  activity: { day: string; anime: number; manga: number; novel: number }[],
+  activity: { day: string; anime: number; manga: number; novel: number; movie?: number; series?: number }[],
   month = activityDay().slice(0, 7),
+  kinds: readonly MediaKind[] = MEDIA_KINDS,
 ): MixShare[] {
-  const counts: Record<MediaKind, number> = { anime: 0, manga: 0, novel: 0 };
+  const counts: Record<MediaKind, number> = { anime: 0, manga: 0, novel: 0, movie: 0, series: 0 };
   for (const a of activity) {
     if (!a.day.startsWith(month)) continue;
     counts.anime += a.anime;
     counts.manga += a.manga;
     counts.novel += a.novel;
+    counts.movie += a.movie ?? 0;
+    counts.series += a.series ?? 0;
   }
-  return mixShares(counts);
+  return mixShares(counts, kinds);
 }
 
 export function wallStyle(wallpaper: string | null): {

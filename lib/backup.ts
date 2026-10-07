@@ -1,9 +1,10 @@
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { db, plain, plainAll } from "./db.ts";
 import { updateProfileSettings, type Settings } from "./settings.ts";
+import { parseHidden, parseKind } from "./kinds.ts";
 import { parseHex, parseName, parseWallpaper } from "./theme.ts";
 import { clampCoord, clampRot, clampScale, chromeKind, pagePath, parseSurface, placeBlocked } from "./sticker-place.ts";
-import type { MediaKind, ProviderSlug } from "./media.ts";
+import { isProviderSlug, type MediaKind, type ProviderSlug } from "./media.ts";
 import { backend, clearSourceHealth } from "./sources/index.ts";
 
 const ZIP_NAME = "backup.json";
@@ -116,11 +117,11 @@ export function profileBackup(profileId: number): Backup {
   return {
     version: 1, type: "profile", exportedAt: Date.now(), data: {
       profile: plain(profile),
-      settings: one("select audio_lang, subtitle_lang, caption_scale, reader_mode, reader_rtl, reader_fit, reader_spread from profile_settings where profile_id = ?"),
+      settings: one("select audio_lang, subtitle_lang, caption_scale, reader_mode, reader_rtl, reader_fit, reader_spread, hidden_kinds from profile_settings where profile_id = ?"),
       genres: all("select genre, weight from profile_genres where profile_id = ?"),
       library: all("select via, media_id, media_type, status, score, added_at, title, cover, color, units, genres, pin from library where profile_id = ?"),
       progress: all("select via, media_id, media_type, unit, anchor, title, cover, updated_at, watched_seconds from progress where profile_id = ?"),
-      activity: all("select day, anime, manga, novel, night from activity where profile_id = ?"),
+      activity: all("select day, anime, manga, novel, movie, series, night from activity where profile_id = ?"),
       providers: all("select provider, chosen_at from provider_choices where profile_id = ?"),
       stickers: all("select sticker_id, earned_at, x, y, rot, surface from stickers where profile_id = ?"),
       placements: all("select sticker_id, path, x, y, scale, rot, surface from sticker_placements where profile_id = ?"),
@@ -160,8 +161,8 @@ export function restoreProfile(profileId: number, backup: Backup) {
     for (const row of unique(library, (r) => `${r.via}:${r.mediaId}`)) lib.run(profileId, row.via, row.mediaId, row.kind, row.status, row.score, row.addedAt, row.title, row.cover, row.color, row.units, row.genres, row.pin);
     const prog = d.prepare("insert into progress (profile_id, via, media_id, media_type, unit, anchor, title, cover, updated_at, watched_seconds) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     for (const row of unique(progress, (r) => `${r.via}:${r.mediaId}`)) prog.run(profileId, row.via, row.mediaId, row.kind, row.unit, row.anchor, row.title, row.cover, row.updatedAt, row.watchedSeconds);
-    const day = d.prepare("insert into activity (profile_id, day, anime, manga, novel, night) values (?, ?, ?, ?, ?, ?)");
-    for (const row of unique(activity, (r) => r.day)) day.run(profileId, row.day, row.anime, row.manga, row.novel, row.night);
+    const day = d.prepare("insert into activity (profile_id, day, anime, manga, novel, movie, series, night) values (?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const row of unique(activity, (r) => r.day)) day.run(profileId, row.day, row.anime, row.manga, row.novel, row.movie, row.series, row.night);
     const choice = d.prepare("insert into provider_choices (profile_id, provider, chosen_at) values (?, ?, ?)");
     for (const row of providers) choice.run(profileId, row.provider, row.chosenAt);
     const pool = d.prepare(`insert into sticker_pools (via, media_id, payload, fetched_at) values (?, ?, ?, ?)
@@ -192,6 +193,8 @@ export async function sourcesBackup(): Promise<Backup> {
       repos: plainAll(d.prepare("select index_url, kind, name, added_at from source_repos").all() as Json[]),
       plugins: plainAll(d.prepare("select id, kind, repo_url, name, lang, version, icon_url, plugin_url, installed from source_plugins").all() as Json[]),
       disabled: plainAll(d.prepare("select kind, id from source_disabled").all() as Json[]),
+      // Scores travel with the sources: a restore must not re-vet and re-disable one you turned back on.
+      vets: plainAll(d.prepare("select kind, id, status, score, hits, scope, avg_ms, median_ms, alive, note, vetted_at, confirmed_at, auto_off from source_vets").all() as Json[]),
       manga: {
         repos: repos.value.map((repo) => repo.indexUrl),
         installed: extensions.value.filter((extension) => extension.isInstalled).map((extension) => extension.pkgName),
@@ -206,6 +209,8 @@ export async function restoreSources(backup: Backup): Promise<string> {
   const repos = rows(backup.data.repos, "repositories").map(restoreRepo);
   const plugins = rows(backup.data.plugins, "extensions").map(restorePlugin);
   const disabled = rows(backup.data.disabled, "disabled sources").map(restoreDisabled);
+  // Older backups have no scores; that is not an error, those sources just get vetted.
+  const vets = backup.data.vets === undefined ? [] : rows(backup.data.vets, "source scores").map(restoreVet);
   const manga = record(backup.data.manga, "manga sources");
   const mangaRepos = strings(manga.repos, "manga repositories", 2_000).map(sourceUrl);
   const installed = strings(manga.installed, "installed manga extensions", 20_000).map((id) => text(id, "extension id", 500));
@@ -249,6 +254,11 @@ export async function restoreSources(backup: Backup): Promise<string> {
     for (const id of sourceIds) clear.run(id);
     const off = d.prepare("insert or ignore into source_disabled (kind, id) values (?, ?)");
     for (const row of unique(disabled, (item) => `${item.kind}:${item.id}`)) off.run(row.kind, row.id);
+    // Never over a verdict this server already reached.
+    const vet = d.prepare(`insert or ignore into source_vets
+      (kind, id, status, score, hits, scope, avg_ms, median_ms, alive, note, vetted_at, confirmed_at, auto_off)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const r of unique(vets, (item) => `${item.kind}:${item.id}`)) vet.run(r.kind, r.id, r.status, r.score, r.hits, r.scope, r.avgMs, r.medianMs, r.alive, r.note, r.vettedAt, r.confirmedAt, r.autoOff);
     d.exec("commit");
   } catch (error) {
     d.exec("rollback");
@@ -303,12 +313,13 @@ function nullableNumber(value: unknown, label: string): number | null {
 }
 
 function kind(value: unknown): MediaKind {
-  if (value === "anime" || value === "manga" || value === "novel") return value;
-  throw new Error("Backup media kind is invalid.");
+  const k = parseKind(value);
+  if (!k) throw new Error("Backup media kind is invalid.");
+  return k;
 }
 
 function via(value: unknown): ProviderSlug {
-  if (value === "anilist" || value === "jikan" || value === "kitsu") return value;
+  if (isProviderSlug(value)) return value;
   throw new Error("Backup metadata provider is invalid.");
 }
 
@@ -343,7 +354,15 @@ function restoreSettings(row: Json): Partial<Settings> {
     reader_rtl: whole(row.reader_rtl, "reader direction", 0, 1),
     reader_fit: text(row.reader_fit, "reader fit", 20) as Settings["reader_fit"],
     reader_spread: text(row.reader_spread, "reader layout", 20) as Settings["reader_spread"],
+    // Backups from before movies and series have no such field: leave the default (nothing hidden).
+    ...(row.hidden_kinds == null ? {} : { hidden_kinds: hiddenKinds(row.hidden_kinds) }),
   };
+}
+
+function hiddenKinds(value: unknown): MediaKind[] {
+  const hidden = parseHidden(value);
+  if (!hidden) throw new Error("Backup hidden categories are invalid.");
+  return hidden;
 }
 
 function restoreGenre(row: Json) { return { genre: text(row.genre, "genre", 80), weight: finite(row.weight, "genre weight", 0, 100) }; }
@@ -357,7 +376,12 @@ function restoreLibrary(row: Json) {
 function restoreProgress(row: Json) {
   return { via: via(row.via), mediaId: whole(row.media_id, "media id", 1), kind: kind(row.media_type), unit: whole(row.unit, "progress unit"), anchor: nullableText(row.anchor, "progress anchor", 50_000), title: nullableText(row.title, "progress title", 1_000), cover: nullableText(row.cover, "progress cover", 2_000), updatedAt: whole(row.updated_at, "progress date"), watchedSeconds: whole(row.watched_seconds, "watched seconds") };
 }
-function restoreActivity(row: Json) { return { day: text(row.day, "activity day", 10), anime: whole(row.anime, "anime activity"), manga: whole(row.manga, "manga activity"), novel: whole(row.novel, "novel activity"), night: whole(row.night, "night activity") }; }
+function restoreActivity(row: Json) {
+  // movie and series are absent from backups made before those categories existed, and
+  // series was "drama" in the first backups that had it.
+  const count = (v: unknown, label: string) => (v == null ? 0 : whole(v, label));
+  return { day: text(row.day, "activity day", 10), anime: whole(row.anime, "anime activity"), manga: whole(row.manga, "manga activity"), novel: whole(row.novel, "novel activity"), movie: count(row.movie, "movie activity"), series: count(row.series ?? row.drama, "series activity"), night: whole(row.night, "night activity") };
+}
 function restoreProvider(row: Json) { return { provider: text(row.provider, "provider", 160), chosenAt: whole(row.chosen_at, "provider date") }; }
 function restoreSticker(row: Json) { return { id: text(row.sticker_id, "sticker", 500), earnedAt: row.earned_at == null ? null : whole(row.earned_at, "sticker date"), x: nullableNumber(row.x, "sticker position"), y: nullableNumber(row.y, "sticker position"), rot: finite(row.rot, "sticker rotation", -360_000, 360_000), surface: row.surface == null ? null : parseSurface(text(row.surface, "sticker surface", 10)) }; }
 function restoreStickerPool(row: Json) {
@@ -385,4 +409,17 @@ function restorePlacement(row: Json) {
 
 function restoreRepo(row: Json) { return { url: sourceUrl(row.index_url), kind: kind(row.kind), name: nullableText(row.name, "repository name", 500), addedAt: whole(row.added_at, "repository date") }; }
 function restorePlugin(row: Json) { return { id: text(row.id, "extension id", 500), kind: kind(row.kind), repoUrl: sourceUrl(row.repo_url), name: text(row.name, "extension name", 500), lang: text(row.lang, "extension language", 100), version: text(row.version, "extension version", 100), iconUrl: nullableText(row.icon_url, "extension icon", 2_000), pluginUrl: row.plugin_url == null ? null : sourceUrl(row.plugin_url), installed: whole(row.installed, "extension state", 0, 1) }; }
+function restoreVet(row: Json) {
+  const status = row.status;
+  if (status !== "ok" && status !== "inconclusive" && status !== "unsupported") throw new Error("Backup source score is invalid.");
+  const k = row.kind;
+  if (k !== "anime" && k !== "manga" && k !== "novel") throw new Error("Backup source score is invalid.");
+  return {
+    kind: k, status, id: text(row.id, "source id", 500),
+    score: nullableNumber(row.score, "source score"), hits: nullableNumber(row.hits, "source score"), scope: nullableNumber(row.scope, "source score"),
+    avgMs: nullableNumber(row.avg_ms, "source score"), medianMs: nullableNumber(row.median_ms, "source score"), alive: nullableNumber(row.alive, "source score"),
+    note: nullableText(row.note, "source score note", 500), vettedAt: whole(row.vetted_at, "source score date"),
+    confirmedAt: row.confirmed_at == null ? null : whole(row.confirmed_at, "source score date"), autoOff: whole(row.auto_off, "source score state", 0, 1),
+  };
+}
 function restoreDisabled(row: Json) { return { kind: kind(row.kind), id: text(row.id, "source id", 500) }; }

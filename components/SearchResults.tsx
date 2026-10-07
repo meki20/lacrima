@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Poster, type RailItem } from "./ui";
 
 export default function SearchResults({
@@ -8,6 +9,7 @@ export default function SearchResults({
 }: {
   groups: { title: string; items: RailItem[] }[];
 }) {
+  const router = useRouter();
   const flat = groups.flatMap((g) => g.items);
   const [sel, setSel] = useState(-1);
 
@@ -27,12 +29,12 @@ export default function SearchResults({
         const m = flat[sel];
         if (!m) return;
         e.preventDefault();
-        window.location.href = m.href ?? `/title/${m.via}/${m.kind}/${m.id}`;
+        router.push(m.href ?? `/title/${m.via}/${m.kind}/${m.id}`);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [flat, sel]);
+  }, [flat, sel, router]);
 
   let n = 0;
   return (

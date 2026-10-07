@@ -16,13 +16,18 @@ import {
   namesSlot,
   playableListing,
   raceFirstPlayable,
+  searchableCatalogs,
+  servesKind,
   servesStreams,
   servesSubtitles,
+  imdbMangaId,
+  stremio,
   streamHref,
   streamTypes,
   streamTypesFor,
   wantedSlot,
 } from "./stremio.ts";
+import { json, withFetch } from "../providers/fetch-mock.ts";
 
 test("HTTP streams become a same-origin proxy URL", () => {
   assert.equal(
@@ -514,4 +519,146 @@ test("a season spelled out beats the SxxExx beside it", () => {
   assert.equal(episodeMatches({ title: "[Judas] One-Punch Man - S01E02.mkv" }, want), true);
   // A complete-series pack names season 1 first and holds the episode.
   assert.equal(episodeMatches({ title: "One Piece Season 01 (East Blue) EP 002" }, want), true);
+});
+
+test("an addon serves a kind only if it names the type we ask under", () => {
+  const films = { types: ["movie"] };
+  const shows = { types: ["series"] };
+  const both = { types: ["movie", "series"] };
+  const anime = { types: ["anime"] };
+  const mixed = { types: ["anime", "series", "movie"] };
+
+  // Movies need "movie", series need "series".
+  assert.deepEqual([films, shows, both, anime, mixed].map((m) => servesKind(m, "movie")), [true, false, true, false, true]);
+  assert.deepEqual([films, shows, both, anime, mixed].map((m) => servesKind(m, "series")), [false, true, true, false, true]);
+  // Anime is never narrowed, whatever the addon declares.
+  assert.deepEqual([films, shows, both, anime, mixed].map((m) => servesKind(m, "anime")), [true, true, true, true, true]);
+
+  // No declared types: asked for everything, as before.
+  assert.equal(servesKind({}, "movie"), true);
+  assert.equal(servesKind({ types: [] }, "series"), true);
+  assert.equal(servesKind({ resources: ["stream"] }, "movie"), true);
+
+  // The stream resource's own types win over the manifest-level ones.
+  const narrowed = {
+    types: ["movie", "series"],
+    resources: [{ name: "stream", types: ["series"], idPrefixes: ["tt"] }],
+  };
+  assert.equal(servesKind(narrowed, "movie"), false);
+  assert.equal(servesKind(narrowed, "series"), true);
+});
+
+test("a movie or series search only reads the catalogs of its own type", () => {
+  const search = [{ name: "search" }];
+  const man = {
+    catalogs: [
+      { type: "anime", id: "a", extra: search },
+      { type: "series", id: "s", extra: search },
+      { type: "movie", id: "m", extra: search },
+      { type: "movie", id: "browse-only" },
+      { type: "series", id: "s2", extraSupported: ["search"] },
+    ],
+  };
+  const ids = (kind?: Parameters<typeof searchableCatalogs>[1]) =>
+    searchableCatalogs(man, kind).map((c) => c.id);
+  assert.deepEqual(ids("movie"), ["m"]);
+  assert.deepEqual(ids("series"), ["s", "s2"]);
+  // Anime and "no kind" keep every searchable catalog in the old movie, series, anime order.
+  assert.deepEqual(ids("anime"), ["m", "s", "s2", "a"]);
+  assert.deepEqual(ids(), ["m", "s", "s2", "a"]);
+  assert.deepEqual(searchableCatalogs({}, "movie"), []);
+});
+
+const CINEMETA = "v3-cinemeta.strem.io";
+const GOT = [
+  { name: "Inside", season: 0, episode: 1, released: "2010-12-06T05:00:00.000Z" },
+  { name: "Two B", season: 2, episode: 2, released: "2012-04-08T01:00:00.000Z", thumbnail: "https://t/2-2.jpg", overview: "Second." },
+  { name: "One A", season: 1, episode: 1, released: "2011-04-17T01:00:00.000Z" },
+  { name: "Two A", season: 2, episode: 1, released: "not a date" },
+  { name: "One B", season: 1, episode: 2 },
+  { season: 1, episode: 3 },
+];
+
+test("a movie's single chapter needs no network at all", async () => {
+  await withFetch(
+    () => undefined,
+    async (calls) => {
+      const r = await stremio.chapters(imdbMangaId("movie", "tt0111161"));
+      assert.ok(r.ok);
+      assert.deepEqual(r.value, [
+        { id: "imdb::tt0111161", number: 1, name: "Movie", scanlator: null, uploadDate: null, pageCount: null },
+      ]);
+      assert.equal(calls.length, 0);
+    },
+  );
+});
+
+test("series episodes: season order, specials last, absolute unit is list position", async () => {
+  await withFetch(
+    (url) => (url.host === CINEMETA && url.pathname === "/meta/series/tt0944947.json" ? json({ meta: { videos: GOT } }) : undefined),
+    async (calls) => {
+      const r = await stremio.chapters(imdbMangaId("series", "tt0944947"));
+      assert.ok(r.ok);
+      const rows = r.value.map((c, i) => [i + 1, c.season, c.number, c.name]);
+      assert.deepEqual(rows, [
+        [1, 1, 1, "One A"],
+        [2, 1, 2, "One B"],
+        [3, 1, 3, "Episode 3"],
+        [4, 2, 1, "Two A"],
+        [5, 2, 2, "Two B"],
+        [6, 0, 1, "Inside"],
+      ]);
+      const [first, , , badDate, withArt, special] = r.value;
+      assert.equal(first.id, "imdb::tt0944947:1:1");
+      assert.equal(first.scanlator, "S1");
+      assert.equal(first.uploadDate, Date.parse("2011-04-17T01:00:00.000Z"));
+      assert.equal(badDate.uploadDate, null);
+      assert.equal(withArt.thumbnailUrl, "https://t/2-2.jpg");
+      assert.equal(withArt.overview, "Second.");
+      assert.equal(special.scanlator, "Specials");
+      assert.equal(special.id, "imdb::tt0944947:0:1");
+
+      // The list is remembered: opening a chapter must not hit Cinemeta again.
+      assert.equal(calls.length, 1);
+      await stremio.chapters(imdbMangaId("series", "tt0944947"));
+      assert.equal(calls.length, 1);
+      await stremio.chapters(imdbMangaId("series", "tt0944947"), true);
+      assert.equal(calls.length, 2);
+    },
+  );
+});
+
+test("a Cinemeta failure is an Err, never an empty episode list", async () => {
+  await withFetch(
+    () => new Response("nope", { status: 503 }),
+    async () => {
+      const r = await stremio.chapters(imdbMangaId("series", "tt0903747"));
+      assert.equal(r.ok, false);
+      assert.equal(r.ok === false && r.lastSuccess, undefined);
+      assert.match(r.ok === false ? r.reason : "", /503/);
+    },
+  );
+  // A series Cinemeta knows but lists nothing for is also "no", not an empty list.
+  await withFetch(
+    () => json({ meta: { videos: [] } }),
+    async () => assert.equal((await stremio.chapters(imdbMangaId("series", "tt0000002"))).ok, false),
+  );
+});
+
+test("a failed refresh reports when the list last worked", async () => {
+  const man = imdbMangaId("series", "tt0386676");
+  const before = Date.now();
+  await withFetch(() => json({ meta: { videos: GOT } }), async () => {
+    assert.ok((await stremio.chapters(man)).ok);
+  });
+  await withFetch(() => new Response("down", { status: 500 }), async () => {
+    const r = await stremio.chapters(man, true);
+    assert.equal(r.ok, false);
+    assert.ok(r.ok === false && r.lastSuccess != null && r.lastSuccess >= before);
+  });
+});
+
+test("an imdb-bound id that is not a movie or series spec is an Err", async () => {
+  assert.equal((await stremio.chapters("imdb::tt0111161")).ok, false);
+  assert.equal((await stremio.chapters("imdb::movie:nm0000093")).ok, false);
 });

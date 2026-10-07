@@ -1,12 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Poster, type RailItem } from "./ui";
 
-const COPIES = 3;
-const TICK_MS = 5000;
-const STAGGER_MS = 1000;
-const SLIDE_MS = 800;
 const COAST_DECAY = 0.92; // per 16ms
 const COAST_MIN = 0.04; // px/ms
 const COAST_MAX = 3.5; // px/ms
@@ -15,128 +12,91 @@ function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
 
-/** Keep scroll in the middle copy so the rail can pan forever in either direction. */
-function wrapRail(el: HTMLDivElement) {
-  const w = el.scrollWidth / COPIES;
-  if (w < 1) return;
-  if (el.scrollLeft < w / 2) el.scrollLeft += w;
-  else if (el.scrollLeft >= w * 1.5) el.scrollLeft -= w;
-}
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-function cardStep(el: HTMLDivElement) {
-  const a = el.children[0] as HTMLElement | undefined;
-  const b = el.children[1] as HTMLElement | undefined;
-  if (!a) return 0;
-  return b ? b.offsetLeft - a.offsetLeft : a.offsetWidth;
-}
-
-function easeInOut(t: number) {
-  return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
-}
-
+/**
+ * A bounded browse strip: one copy of the items, native scrolling, drag-coast
+ * on desktop. Nothing moves unless the user moves it.
+ */
 export default function Rail({
   title,
   href,
   action,
   items,
+  priority,
 }: {
   title: string;
   href?: string;
   action?: string;
   items: RailItem[];
+  /** The first rail on a page: its leading posters load eagerly. */
+  priority?: boolean;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const held = useRef(false);
-  const sliding = useRef(false);
+  const ref = useRef<HTMLUListElement>(null);
   const frame = useRef(0);
+  // Which ends still have content past them. Drives the arrows and the edge fade.
+  const [canPrev, setCanPrev] = useState(false);
+  const [canNext, setCanNext] = useState(true);
 
-  const stopSlide = () => {
-    cancelAnimationFrame(frame.current);
-    sliding.current = false;
-  };
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      setCanPrev(el.scrollLeft > 1);
+      setCanNext(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+    };
+    const queue = () => {
+      if (!raf) raf = requestAnimationFrame(measure);
+    };
+    measure();
+    el.addEventListener("scroll", queue, { passive: true });
+    const ro = new ResizeObserver(queue);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", queue);
+      ro.disconnect();
+      cancelAnimationFrame(raf);
+      cancelAnimationFrame(frame.current);
+    };
+  }, [items]);
 
-  const coast = (el: HTMLDivElement, pointerVx: number) => {
+  const coast = (el: HTMLElement, pointerVx: number) => {
     let v = clamp(pointerVx, -COAST_MAX, COAST_MAX);
     if (Math.abs(v) < COAST_MIN) return;
-    sliding.current = true;
     let last = performance.now();
     const tick = (now: number) => {
-      if (held.current) {
-        sliding.current = false;
-        return;
-      }
       const dt = Math.min(32, now - last);
       last = now;
       v *= COAST_DECAY ** (dt / 16);
       el.scrollLeft -= v * dt;
-      wrapRail(el);
-      if (Math.abs(v) < COAST_MIN) {
-        sliding.current = false;
-        return;
-      }
-      frame.current = requestAnimationFrame(tick);
+      if (Math.abs(v) >= COAST_MIN) frame.current = requestAnimationFrame(tick);
     };
     frame.current = requestAnimationFrame(tick);
   };
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.scrollLeft = el.scrollWidth / COPIES;
-    const ro = new ResizeObserver(() => {
-      if (!sliding.current) wrapRail(el);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [items]);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-
-    const slide = () => {
-      if (held.current || sliding.current) return;
-      const from = el.scrollLeft;
-      const delta = cardStep(el);
-      if (!delta) return;
-      sliding.current = true;
-      const t0 = performance.now();
-      const tick = (now: number) => {
-        if (held.current) {
-          sliding.current = false;
-          return;
-        }
-        const t = Math.min(1, (now - t0) / SLIDE_MS);
-        el.scrollLeft = from + delta * easeInOut(t);
-        if (t < 1) {
-          frame.current = requestAnimationFrame(tick);
-          return;
-        }
-        sliding.current = false;
-        wrapRail(el);
-      };
-      frame.current = requestAnimationFrame(tick);
-    };
-
-    const i = Math.max(0, [...document.querySelectorAll(".rail")].indexOf(el));
-    let interval: ReturnType<typeof setInterval> | undefined;
-    const start = setTimeout(() => {
-      slide();
-      interval = setInterval(slide, TICK_MS);
-    }, TICK_MS + i * STAGGER_MS);
-
-    return () => {
-      clearTimeout(start);
-      clearInterval(interval);
-      stopSlide();
-    };
-  }, []);
-
+  /** About one viewport of whole cards, so the next page starts on a poster edge. */
   const nudge = (dir: number) => {
     const el = ref.current;
-    if (!el) return;
-    el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
+    const first = el?.children[0] as HTMLElement | undefined;
+    if (!el || !first) return;
+    const next = el.children[1] as HTMLElement | undefined;
+    const step = next ? next.offsetLeft - first.offsetLeft : first.offsetWidth;
+    const page = Math.max(step, Math.floor(el.clientWidth / step) * step);
+    el.scrollBy({ left: dir * page, behavior: reducedMotion() ? "auto" : "smooth" });
+  };
+
+  /** Arrow keys walk poster to poster; Tab still gets one stop per poster. */
+  const onKeyDown = (e: React.KeyboardEvent<HTMLUListElement>) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return; // Alt+Left is "back"
+    const item = (e.target as HTMLElement).closest("li");
+    const to = (e.key === "ArrowRight" ? item?.nextElementSibling : item?.previousElementSibling)?.querySelector("a");
+    if (!to) return;
+    e.preventDefault();
+    to.focus({ preventScroll: true });
+    to.scrollIntoView({ inline: "nearest", block: "nearest" });
   };
 
   /**
@@ -148,8 +108,7 @@ export default function Rail({
     const el = ref.current;
     if (!el) return;
 
-    stopSlide();
-    held.current = true;
+    cancelAnimationFrame(frame.current);
     const originX = e.clientX;
     let lastX = e.clientX;
     let lastT = performance.now();
@@ -168,10 +127,8 @@ export default function Rail({
       el.scrollLeft -= ev.clientX - lastX;
       lastX = ev.clientX;
       lastT = now;
-      wrapRail(el);
     };
     const up = () => {
-      held.current = false;
       el.classList.remove("panning");
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
@@ -195,31 +152,44 @@ export default function Rail({
     <section>
       <div className="row-h">
         <h2>{title}</h2>
-        {action && <a href={href ?? "#"}>{action}</a>}
+        {action && (href ? <Link href={href}>{action}</Link> : <a href="#">{action}</a>)}
       </div>
 
       <div className="rail-wrap">
-        <button className="arrow left" onClick={() => nudge(-1)} aria-label={`Scroll ${title} left`}>
+        <button
+          type="button"
+          className="arrow left"
+          onClick={() => nudge(-1)}
+          disabled={!canPrev}
+          aria-label={`Scroll ${title} left`}
+        >
           ‹
         </button>
 
-        <div
+        <ul
           className="rail"
+          role="list"
+          aria-label={title}
+          data-fade={canPrev && canNext ? "both" : canPrev ? "start" : canNext ? "end" : undefined}
           ref={ref}
-          onScroll={() => {
-            if (held.current || sliding.current) return;
-            const el = ref.current;
-            if (el) wrapRail(el);
-          }}
+          onKeyDown={onKeyDown}
           onMouseDown={onMouseDown}
           onDragStart={(e) => e.preventDefault()}
         >
-          {[0, 1, 2].flatMap((copy) =>
-            items.map((m) => <Poster key={`${copy}-${m.kind}-${m.id}`} media={m} />),
-          )}
-        </div>
+          {items.map((m, i) => (
+            <li key={`${m.via}-${m.kind}-${m.id}`}>
+              <Poster media={m} index={priority ? i : undefined} />
+            </li>
+          ))}
+        </ul>
 
-        <button className="arrow right" onClick={() => nudge(1)} aria-label={`Scroll ${title} right`}>
+        <button
+          type="button"
+          className="arrow right"
+          onClick={() => nudge(1)}
+          disabled={!canNext}
+          aria-label={`Scroll ${title} right`}
+        >
           ›
         </button>
       </div>

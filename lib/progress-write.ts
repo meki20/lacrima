@@ -1,4 +1,5 @@
 import type { Anchor } from "./db.ts";
+import { isVideoKind } from "./kinds.ts";
 import type { MediaKind, ProviderSlug } from "./media.ts";
 
 /** Serializable progress payload passed from a server page into client readers. */
@@ -61,6 +62,13 @@ export function heldUnit(_kind: MediaKind, prev: number, next: number): number {
 /** Assumed episode length when the title has no runtime — skip-ahead still counts. */
 export const ANIME_EPISODE_SECONDS = 24 * 60;
 
+/** The same fallback per kind: an anime episode, an hour-long series episode, a feature film. Zero for reading. */
+export function defaultRuntimeSeconds(kind: MediaKind): number {
+  if (kind === "anime") return ANIME_EPISODE_SECONDS;
+  if (kind === "series") return 45 * 60;
+  return kind === "movie" ? 110 * 60 : 0;
+}
+
 /** Episodes completed by jumping from `prev` to `next` (1-based list index). */
 export function skipWatchSeconds(prevUnit: number, nextUnit: number, episodeSeconds: number): number {
   const prev = Math.max(0, Math.floor(prevUnit));
@@ -98,7 +106,7 @@ export function keepsResumeAnchor(
 }
 
 export function holdStickerToasts(pathname: string): boolean {
-  return /\/read\/[^/]+\/anime(?:\/|$)/.test(pathname);
+  return /\/read\/[^/]+\/(?:anime|movie|series)(?:\/|$)/.test(pathname);
 }
 
 const TOAST_KEY = "lacrima.stickerToasts";
@@ -132,7 +140,7 @@ function readToasts(): AwardedSticker[] {
   }
 }
 
-function chapterAnchor(p: ProgressWrite): Anchor {
+export function chapterAnchor(p: ProgressWrite): Anchor {
   if (p.kind === "novel") {
     return {
       kind: "paragraph",
@@ -141,7 +149,7 @@ function chapterAnchor(p: ProgressWrite): Anchor {
       chapterName: p.chapterName,
     };
   }
-  if (p.kind === "anime") {
+  if (isVideoKind(p.kind)) {
     return {
       kind: "seconds",
       at: 0,

@@ -8,14 +8,15 @@ import {
   type LibraryStatus,
 } from "@/lib/library";
 import { removeHistory } from "@/lib/progress";
-import type { MediaKind, ProviderSlug } from "@/lib/media";
+import { parseKind } from "@/lib/kinds";
+import { isProviderSlug } from "@/lib/media";
 
 export const runtime = "nodejs";
 
 type Body = {
-  via?: ProviderSlug;
+  via?: unknown;
   id?: number;
-  kind?: MediaKind;
+  kind?: unknown;
   title?: string;
   cover?: string | null;
   color?: string | null;
@@ -26,7 +27,7 @@ type Body = {
   pin?: boolean;
   remove?: boolean;
   removeHistory?: boolean;
-  reorder?: { via: ProviderSlug; id: number }[];
+  reorder?: { via?: unknown; id?: unknown }[];
 };
 
 export async function POST(req: Request) {
@@ -37,13 +38,23 @@ export async function POST(req: Request) {
     return Response.json({ error: "Bad json" }, { status: 400 });
   }
   const me = await currentProfile();
-  if (body.reorder) {
-    reorderPins(me.id, body.reorder);
+  if (Array.isArray(body.reorder)) {
+    reorderPins(
+      me.id,
+      body.reorder.flatMap((r) =>
+        isProviderSlug(r?.via) && Number.isInteger(r.id) ? [{ via: r.via, id: r.id as number }] : [],
+      ),
+    );
     return Response.json({ ok: true });
   }
-  const { via, id, kind, title } = body;
-  if (!via || !kind || id == null) {
+  const { id, title } = body;
+  if (!body.via || !body.kind || id == null) {
     return Response.json({ error: "Missing fields" }, { status: 400 });
+  }
+  const via = isProviderSlug(body.via) ? body.via : null;
+  const kind = parseKind(body.kind);
+  if (!via || !kind) {
+    return Response.json({ error: "Unknown provider or kind" }, { status: 400 });
   }
   if (body.remove || body.status === "remove") {
     removeLibrary(me.id, via, id);

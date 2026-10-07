@@ -1,4 +1,5 @@
 import { db, plain, plainAll } from "./db.ts";
+import { isStandalone } from "./kinds.ts";
 import type { Media, MediaKind, ProviderSlug } from "./media.ts";
 import { franchiseKey, franchiseLabel, seriesTitle } from "./series.ts";
 
@@ -84,7 +85,7 @@ export function toItem(row: LibraryRow): LibraryItem {
     status: parseStatus(row.status) ?? "reading",
     score: row.score,
     added_at: row.added_at,
-    title: seriesTitle(row.title ?? "Untitled"),
+    title: isStandalone(row.media_type) ? (row.title ?? "Untitled") : seriesTitle(row.title ?? "Untitled"),
     cover: row.cover,
     color: row.color,
     units: row.units,
@@ -139,6 +140,10 @@ export function collapseLibrary(items: LibraryItem[]): LibraryItem[] {
   const seen = new Set<string>();
   const out: LibraryItem[] = [];
   for (const m of items) {
+    if (isStandalone(m.kind)) {
+      out.push(m);
+      continue;
+    }
     const peers = items.filter((x) => x.via === m.via && x.kind === m.kind);
     const titles = peers.map((x) => x.title);
     const k = `${m.via}|${m.kind}|${franchiseKey(m.title, titles)}`;
@@ -193,6 +198,7 @@ export function progressRatio(m: Pick<LibraryItem, "unit" | "units">): number {
 export function progressLabel(m: Pick<LibraryItem, "kind" | "unit" | "units">): string {
   const have = m.unit ?? 0;
   const total = m.units;
+  if (m.kind === "movie") return "Movie";
   if (m.kind === "novel") return total ? `vol ${have} / ${total}` : `vol ${have}`;
   return total ? `${have} / ${total}` : String(have);
 }

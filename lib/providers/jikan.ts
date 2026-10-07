@@ -113,6 +113,7 @@ async function getPage(
 export const jikan: Provider = {
   slug: "jikan",
   name: "MyAnimeList",
+  kinds: ["anime", "manga", "novel"],
 
   async fetchTitle(kind, id) {
     try {
@@ -177,6 +178,8 @@ export const jikan: Provider = {
         anime: anime.value.map((m) => shape(m, "anime")),
         manga: manga.value.map((m) => shape(m, "manga")),
         novels: novels.value.map((m) => shape(m, "novel")),
+        movies: [],
+        series: [],
       });
     } catch (e) {
       return Err(e instanceof Error ? e.message : "Could not reach MyAnimeList.");

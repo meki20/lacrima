@@ -4,14 +4,20 @@ import { Err, Ok } from "../result.ts";
 import type { SourceBackend, SourceInfo } from "./types.ts";
 import { suwayomi } from "./suwayomi.ts";
 import { lnreader } from "./lnreader.ts";
-import { stremio } from "./stremio.ts";
+import { servesKind, stremio } from "./stremio.ts";
 import { isSourceDisabled } from "./store.ts";
 
 export const BACKENDS: Record<MediaKind, SourceBackend> = {
   manga: suwayomi,
   novel: lnreader,
   anime: stremio,
+  // Movies and series draw on the same Stremio addon pool as anime.
+  movie: stremio,
+  series: stremio,
 };
+
+/** Each backend once: movie and series share anime's, and its sources must not be listed three times. */
+const DISTINCT = [...new Set(Object.values(BACKENDS))];
 
 export const backend = (kind: MediaKind): SourceBackend => BACKENDS[kind] ?? suwayomi;
 
@@ -35,12 +41,22 @@ function langPref(lang: string): number {
   return 2;
 }
 
-export function pickSearchable<T extends { isLocal: boolean; lang: string; id: string; kind: MediaKind }>(
-  all: T[],
-): T[] {
+/**
+ * Who to search, capped. `kind` is the title's kind: movie and series share anime's
+ * addon pool, so an addon that declared it serves something else is skipped here
+ * rather than being asked and discarded. Omit it (or pass anime/manga/novel) and
+ * nothing is narrowed.
+ */
+export function pickSearchable<
+  T extends { isLocal: boolean; lang: string; id: string; kind: MediaKind; types?: string[] },
+>(all: T[], kind?: MediaKind): T[] {
   return all
     .filter(
-      (s) => !s.isLocal && langMatches(s.lang) && !isSourceDisabled(s.kind, s.id),
+      (s) =>
+        !s.isLocal &&
+        langMatches(s.lang) &&
+        !isSourceDisabled(s.kind, s.id) &&
+        (!kind || servesKind(s, kind)),
     )
     .sort((a, b) => langPref(a.lang) - langPref(b.lang))
     .slice(0, 8);
@@ -57,11 +73,11 @@ export function clearSourceHealth() {
 
 export async function allRemoteSources(): Promise<Result<SourceInfo[]>> {
   if (healthHit && Date.now() - healthAt < HEALTH_TTL_MS) return healthHit;
-  const rs = await Promise.all(Object.values(BACKENDS).map((b) => b.listSources()));
+  const rs = await Promise.all(DISTINCT.map((b) => b.listSources()));
   const out: SourceInfo[] = [];
   const failures: string[] = [];
   for (const [i, r] of rs.entries()) {
-    const name = Object.values(BACKENDS)[i].name;
+    const name = DISTINCT[i].name;
     if (!r.ok) {
       failures.push(`${name}: ${r.reason}`);
       continue;
@@ -69,7 +85,7 @@ export async function allRemoteSources(): Promise<Result<SourceInfo[]>> {
     out.push(...r.value.filter((s) => !s.isLocal && !isSourceDisabled(s.kind, s.id)));
   }
   const hit: Result<SourceInfo[]> =
-    out.length === 0 && failures.length === Object.keys(BACKENDS).length
+    out.length === 0 && failures.length === DISTINCT.length
       ? Err(`Every source backend failed. ${failures.join(" ")}`)
       : Ok(out);
   healthAt = Date.now();

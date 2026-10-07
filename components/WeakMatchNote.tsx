@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { dismissWeak, weakDismissed } from "@/lib/weak-note";
 
 const STORE = "lacrima-weak-dismiss";
@@ -27,9 +28,9 @@ export default function WeakMatchNote({
     <div className="note">
       <span className="dot" style={{ background: "var(--warn)" }} />
       Matched to <b>&nbsp;{sourceTitle}&nbsp;</b> — only {Math.round(confidence * 100)}% confident.
-      <a href={href} style={{ marginLeft: "auto", color: "var(--accent)" }}>
+      <Link prefetch={false} href={href} style={{ marginLeft: "auto", color: "var(--accent-fg)" }}>
         {change ? "Never mind" : "Pick another"}
-      </a>
+      </Link>
       <button
         type="button"
         className="note-dismiss"

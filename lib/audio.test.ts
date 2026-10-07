@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   bucketLangs,
   claimedLangs,
+  nativeLang,
   parseLang,
   parseLangToken,
   pickAudioTrack,
@@ -156,4 +157,34 @@ test("a Hindi flag is read as Hindi", () => {
   );
   // A genuine Japanese release is untouched.
   assert.deepEqual(bucketLangs("[HS+] Sootio auto 🔗Gdrive + Mirrors 🇯🇵 AnimeFlix"), ["ja"]);
+});
+
+test("a film or show is filed under its own language, not Japanese", () => {
+  const rip = "The.Shawshank.Redemption.1994.1080p.BluRay.x264";
+  assert.deepEqual(bucketLangs(rip), ["ja"]);
+  assert.deepEqual(bucketLangs(rip, "en"), ["en"]);
+  assert.deepEqual(trackLangs(rip, "zh"), ["zh"]);
+  // Naming a language still beats the default, and subs never change the audio.
+  assert.deepEqual(bucketLangs("Parasite 2019 1080p Korean", "ko"), ["ko"]);
+  assert.deepEqual(bucketLangs("Parasite 2019 1080p English Subs", "ko"), ["ko"]);
+  assert.deepEqual(bucketLangs("Les Evades 1080p MULTi", "fr").sort(), ["en", "fr"]);
+});
+
+test("nativeLang reads the provider's original language, English when it says nothing", () => {
+  assert.equal(nativeLang("anime", "English"), "ja");
+  assert.equal(nativeLang("movie", "English"), "en");
+  assert.equal(nativeLang("series", "Mandarin, Cantonese"), "zh");
+  assert.equal(nativeLang("series", "ko"), "ko");
+  // Cinemeta names a country, not a language.
+  assert.equal(nativeLang("series", "China"), "zh");
+  assert.equal(nativeLang("movie", "South Korea, United States"), "ko");
+  assert.equal(nativeLang("movie", "United States"), "en");
+  assert.equal(nativeLang("movie", null), "en");
+  assert.equal(nativeLang("movie", "Klingon"), "en");
+});
+
+test("an unlabelled track in a film's own language is not a wrong-language pick", () => {
+  const hint = "The.Shawshank.Redemption.1994.1080p.BluRay.x264";
+  assert.equal(pickAudioTrack([{ language: "und" }], "en", hint), -1);
+  assert.equal(pickAudioTrack([{ language: "und" }], "en", hint, "en"), null);
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { playFileArgs, remuxArgs, selfRelayUrl, subtitleTracksFromProbe } from "./remux.ts";
+import { aliasCount, playFileArgs, remuxArgs, selfRelayUrl, subtitleTracksFromProbe } from "./remux.ts";
 
 const at = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
 const maps = (args: string[]) =>
@@ -123,4 +123,28 @@ test("subtitle probing keeps track metadata and ignores other streams", () => {
     [{ index: 2, codec: "ass", language: "eng", title: "Full" }],
   );
   assert.deepEqual(subtitleTracksFromProbe("bad json"), []);
+});
+
+test("a language is matched under each of its ISO spellings", () => {
+  // HdHub tags its Chinese track `chi`, not `zho`; French and German do the same.
+  assert.equal(aliasCount("zh"), 3);
+  assert.deepEqual(maps(remuxArgs("http://relay/x", { lang: "zh", alias: 1 })), ["0:v:0", "0:a:m:language:chi"]);
+  assert.deepEqual(maps(remuxArgs("http://relay/x", { lang: "fr", alias: 1 })), ["0:v:0", "0:a:m:language:fre"]);
+  assert.deepEqual(maps(remuxArgs("http://relay/x", { lang: "de", alias: 1 })), ["0:v:0", "0:a:m:language:ger"]);
+  // Languages with one spelling, and an alias past the end, stay on the first.
+  assert.deepEqual(maps(remuxArgs("http://relay/x", { lang: "ja", alias: 1 })), ["0:v:0", "0:a:m:language:jpn"]);
+  assert.equal(aliasCount("ja"), 1);
+});
+
+test("the audio tap is a second output and changes nothing when absent", () => {
+  const plain = remuxArgs("http://relay/x", { lang: "ja" });
+  assert.ok(!plain.includes("s16le") && !plain.includes("-y"));
+
+  const tapped = remuxArgs("http://relay/x", { lang: "ja", tap: "/tmp/t.s16" });
+  // The main output is the plain one, untouched; the tap follows it with its own map of the same audio.
+  assert.deepEqual(tapped.slice(0, tapped.indexOf("pipe:1") + 1).filter((a) => a !== "-y"), plain);
+  assert.deepEqual(maps(tapped), ["0:v:0", "0:a:m:language:jpn", "0:a:m:language:jpn"]);
+  assert.equal(tapped.at(-1), "/tmp/t.s16");
+  assert.equal(at(tapped, "-t"), "600");
+  assert.equal(tapped.indexOf("pipe:1") < tapped.indexOf("/tmp/t.s16"), true);
 });

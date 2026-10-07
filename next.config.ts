@@ -12,6 +12,13 @@ const nextConfig: NextConfig = {
   // node_modules and no npm install on the server.
   output: "standalone",
   serverExternalPackages: ["webtorrent"],
+  // Series began as "drama". Old bookmarks, Continue links and shared URLs keep working;
+  // the query string passes through untouched.
+  redirects: async () => [
+    { source: "/dramas", destination: "/series", permanent: true },
+    { source: "/title/:via/drama/:id", destination: "/title/:via/series/:id", permanent: true },
+    { source: "/read/:via/drama/:id/:chapterId", destination: "/read/:via/series/:id/:chapterId", permanent: true },
+  ],
 };
 
 export default nextConfig;

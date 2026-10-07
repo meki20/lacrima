@@ -1,3 +1,4 @@
+import Link from "next/link";
 import TopBar from "@/components/TopBar";
 import LibrarySort from "@/components/LibrarySort";
 import PinnedShelf from "@/components/PinnedShelf";
@@ -14,6 +15,9 @@ import {
   STATUS_LABEL,
   STATUSES,
 } from "@/lib/library";
+import { keepKinds } from "@/lib/browse";
+import { KIND_INFO, parseKind } from "@/lib/kinds";
+import { visibleFor } from "@/lib/kinds-server";
 import type { MediaKind } from "@/lib/media";
 import { allProfiles, currentProfile } from "@/lib/profile";
 import { earnedCount } from "@/lib/stickers";
@@ -28,13 +32,6 @@ import {
 } from "@/lib/yours";
 
 export const dynamic = "force-dynamic";
-
-const KINDS: { id: MediaKind | ""; label: string }[] = [
-  { id: "", label: "All" },
-  { id: "anime", label: "Anime" },
-  { id: "manga", label: "Manga" },
-  { id: "novel", label: "Novels" },
-];
 
 function yoursHref(q: Record<string, string | undefined>): string {
   const p = new URLSearchParams();
@@ -51,21 +48,29 @@ export default async function Yours({
   const sp = await searchParams;
   const me = await currentProfile();
   const people = allProfiles();
-  const kind = (["anime", "manga", "novel"] as const).includes(sp.kind as MediaKind)
-    ? (sp.kind as MediaKind)
-    : null;
+  const kinds = visibleFor(me.id);
+  const chips: { id: MediaKind | ""; label: string }[] = [
+    { id: "", label: "All" },
+    ...kinds.map((id) => ({ id, label: KIND_INFO[id].label })),
+  ];
+  // A stale ?kind= for a hidden category is just "All", not an empty grid with no chip lit.
+  const asked = parseKind(sp.kind);
+  const kind = asked && kinds.includes(asked) ? asked : null;
   const status = parseStatus(sp.status);
   const sort = parseSort(sp.sort);
   const q = sp.q?.trim() ?? "";
   const genre = sp.genre?.trim() || null;
 
   const activity = loadActivity(me.id);
-  const progress = loadProgress(me.id);
   backfillLibrary(me.id);
-  const items = listLibrary(me.id);
+  const all = listLibrary(me.id);
+  // Hidden categories leave the grid, chips, mix, stats and shelf; the rows themselves stay.
+  const items = keepKinds(all, kinds);
+  const hidden = all.length - items.length;
+  const progress = loadProgress(me.id).filter((p) => kinds.includes(p.media_type));
   const facts = collectFacts(items, progress, activity);
   const stickers = earnedCount(me.id);
-  const mix = monthMix(activity);
+  const mix = monthMix(activity, undefined, kinds);
   const shelf = shelfItems(items);
   const genres = libraryGenres(items);
   const shown = sortLibrary(filterLibrary(items, { kind, status, genre, q, sort }), sort);
@@ -109,10 +114,10 @@ export default async function Yours({
             <b>{formatStat(facts.streak)} d</b>
             <span>current streak</span>
           </div>
-          <a className="stat" href="/stickers">
+          <Link className="stat" href="/stickers">
             <b>{formatStat(stickers)}</b>
             <span>stickers earned</span>
-          </a>
+          </Link>
         </div>
       </div>
 
@@ -148,25 +153,36 @@ export default async function Yours({
             <h2>Your library</h2>
             <span className="mono">{formatStat(items.length)} titles</span>
           </div>
+          {/* Nothing vanishes silently: say how many the category settings are holding back. */}
+          {hidden > 0 && (
+            <p className="mono" style={{ margin: "0 0 12px" }}>
+              {formatStat(hidden)} {hidden === 1 ? "title" : "titles"} hidden by your category settings ·{" "}
+              <Link prefetch={false} href="/settings" style={{ textDecoration: "underline" }}>
+                Settings
+              </Link>
+            </p>
+          )}
           <div className="filters">
-            {KINDS.map((k) => (
-              <a
+            {chips.map((k) => (
+              <Link
+                prefetch={false}
                 key={k.label}
                 className={`chip${(kind ?? "") === k.id ? " on" : ""}`}
                 href={yoursHref({ ...query, kind: k.id || undefined })}
               >
                 {k.label}
-              </a>
+              </Link>
             ))}
             <span className="filter-gap" />
             {STATUSES.map((s) => (
-              <a
+              <Link
+                prefetch={false}
                 key={s}
                 className={`chip${status === s ? " on" : ""}`}
                 href={yoursHref({ ...query, status: status === s ? undefined : s })}
               >
                 {STATUS_LABEL[s]}
-              </a>
+              </Link>
             ))}
             <span className="spacer" />
             <LibrarySort value={sort} query={query} />
@@ -174,13 +190,14 @@ export default async function Yours({
           {genres.length > 0 && (
             <div className="filters">
               {genres.map((g) => (
-                <a
+                <Link
+                  prefetch={false}
                   key={g}
                   className={`chip${genre === g ? " on" : ""}`}
                   href={yoursHref({ ...query, genre: genre === g ? undefined : g })}
                 >
                   {g}
-                </a>
+                </Link>
               ))}
             </div>
           )}
@@ -200,7 +217,13 @@ export default async function Yours({
           </form>
           {shown.length === 0 ? (
             <div className="empty">
-              <b>{items.length === 0 ? "Your library is empty" : "Nothing matches these filters"}</b>
+              <b>
+                {items.length > 0
+                  ? "Nothing matches these filters"
+                  : hidden > 0
+                    ? "Nothing in your visible categories"
+                    : "Your library is empty"}
+              </b>
               {items.length === 0
                 ? "Open a title and add it, or just start reading — progress puts it here."
                 : "Clear a filter, or search a different name."}
@@ -208,7 +231,7 @@ export default async function Yours({
           ) : (
             <div className="yours-grid">
               {shown.map((m) => (
-                <a className="yours-card" key={`${m.via}-${m.kind}-${m.id}`} href={m.href}>
+                <Link prefetch={false} className="yours-card" key={`${m.via}-${m.kind}-${m.id}`} href={m.href}>
                   <div className="poster" style={{ background: m.color ?? "var(--s2)" }}>
                     {m.cover ? <img src={m.cover} alt="" loading="lazy" decoding="async" /> : null}
                   </div>
@@ -218,7 +241,7 @@ export default async function Yours({
                     <span>{progressLabel(m)}</span>
                     {m.score != null && <span>{m.score}/10</span>}
                   </div>
-                </a>
+                </Link>
               ))}
             </div>
           )}

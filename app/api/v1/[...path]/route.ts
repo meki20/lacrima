@@ -36,6 +36,8 @@ import { resolveStreams, resolveSubtitles } from "@/lib/sources/stremio";
 import { fileHref } from "@/lib/subs";
 import { decodeSubBytes, readSubBody } from "@/lib/sub-cache";
 import { disabledIds, setSourceDisabled } from "@/lib/sources/store";
+
+import { ensureVetted, isVetKind, retryVet, vetViewsFor } from "@/lib/vet-service";
 import {
   episodeWindow,
   fetchSeries,
@@ -73,6 +75,7 @@ import {
   apiError,
   apiOk,
   finiteNumber,
+  inV1Lists,
   jsonObject,
   optionalString,
   parseKind,
@@ -83,6 +86,7 @@ import {
   resultResponse,
 } from "@/lib/api/http";
 import { sanitizeNovelHtml } from "@/lib/api/sanitize";
+import { isVideoKind } from "@/lib/kinds";
 import { skipTimes } from "@/lib/skip-times";
 import packageJson from "../../../../package.json" with { type: "json" };
 
@@ -169,7 +173,7 @@ function progressDto(row: ReturnType<typeof getProgress>) {
 async function sourceHealth() {
   const health = await allRemoteSources();
   if (!health.ok) return resultEnvelope(health);
-  const counts: Record<MediaKind, number> = { anime: 0, manga: 0, novel: 0 };
+  const counts: Record<MediaKind, number> = { anime: 0, manga: 0, novel: 0, movie: 0, series: 0 };
   for (const source of health.value) counts[source.kind]++;
   return resultEnvelope({ ok: true, value: { total: health.value.length, counts, sources: health.value } });
 }
@@ -185,6 +189,8 @@ async function bootstrap(req: Request) {
       anime: true,
       manga: true,
       novels: true,
+      movies: true,
+      series: true,
       profiles: true,
       sourceManagement: true,
       stickers: true,
@@ -199,9 +205,9 @@ async function bootstrap(req: Request) {
 
 async function home(req: Request) {
   const me = profile(req);
-  const [catalog, health] = await Promise.all([fetchHome(topGenre(me.id)), sourceHealth()]);
+  const [catalog, health] = await Promise.all([fetchHome(topGenre(me.id), []), sourceHealth()]);
   return apiOk({
-    continue: continueReading(me.id),
+    continue: continueReading(me.id).filter((i) => inV1Lists(i.kind)),
     catalog: resultEnvelope(catalog),
     sourceHealth: health,
   });
@@ -221,7 +227,8 @@ async function search(req: Request) {
   profile(req);
   const q = new URL(req.url).searchParams.get("q")?.trim() ?? "";
   if (!q) throw new ApiFault(400, "query_required", "Search query is required.");
-  return resultResponse(await fetchSearch(q));
+  // v1 lists stay anime/manga/novel; movies and series are additive and not fetched here.
+  return resultResponse(await fetchSearch(q, ["anime", "manga", "novel"]));
 }
 
 async function title(req: Request, path: string[]) {
@@ -321,7 +328,7 @@ function proxiedPage(url: string) {
 async function reader(req: Request, path: string[]) {
   const me = profile(req);
   const { via, kind, id } = titlePath(path);
-  if (kind === "anime") throw new ApiFault(400, "wrong_reader", "Use the playback endpoint for anime.");
+  if (isVideoKind(kind)) throw new ApiFault(400, "wrong_reader", "Use the playback endpoint for video titles.");
   const chapterId = decodeURIComponent(path[4] ?? "");
   if (!chapterId) throw new ApiFault(400, "chapter_required", "Chapter id is required.");
   const binding = (await import("@/lib/match")).getBinding(via, id, kind);
@@ -614,7 +621,7 @@ async function libraryGet(req: Request) {
   const me = profile(req);
   const url = new URL(req.url);
   backfillLibrary(me.id);
-  const items = listLibrary(me.id);
+  const items = listLibrary(me.id).filter((i) => inV1Lists(i.kind));
   const kindRaw = url.searchParams.get("kind");
   const kind = kindRaw ? parseKind(kindRaw) : null;
   const status = parseStatus(url.searchParams.get("status"));
@@ -795,7 +802,17 @@ async function sourcesGet(req: Request) {
   const r = await backend(kind).listSources();
   if (!r.ok) return resultResponse(r);
   const disabled = disabledIds(kind);
-  return apiOk({ sources: r.value.map((s) => ({ ...s, enabled: !disabled.has(s.id) })) });
+  const vet = isVetKind(kind) ? vetViewsFor(kind, r.value.map((s) => s.id)) : {};
+  return apiOk({ sources: r.value.map((s) => ({ ...s, enabled: !disabled.has(s.id), vet: vet[s.id] ?? null })) });
+}
+
+/** Vet one source again. The score arrives later in `GET /sources` as `vet`. */
+async function sourcesVet(req: Request) {
+  const body = await jsonObject(req);
+  const kind = sourceKind(req, body);
+  const id = optionalString(body.id);
+  if (!id || !isVetKind(kind)) throw new ApiFault(400, "missing_fields", "A source kind and id are required.");
+  return apiOk({ id, kind, vet: retryVet(kind, id) }, 202);
 }
 
 async function sourcesPatch(req: Request) {
@@ -809,6 +826,7 @@ async function sourcesPatch(req: Request) {
     if (!r.ok) return resultResponse(r);
   }
   clearSourceHealth();
+  if (body.enabled && isVetKind(kind)) void ensureVetted(kind);
   return apiOk({ id, kind, enabled: body.enabled });
 }
 
@@ -825,6 +843,7 @@ async function reposPost(req: Request) {
   if (!added.ok) return resultResponse(added);
   const refreshed = await backend(kind).refreshExtensions();
   clearSourceHealth();
+  if (isVetKind(kind)) void ensureVetted(kind);
   return apiOk({ indexUrl, kind, refreshed: resultEnvelope(refreshed) }, 201);
 }
 
@@ -860,6 +879,7 @@ async function extensionsPatch(req: Request) {
   if (!pkgName || typeof body.installed !== "boolean") throw new ApiFault(400, "missing_fields", "Extension id and installed are required.");
   const r = await backend(kind).setExtensionInstalled(pkgName, body.installed);
   clearSourceHealth();
+  if (body.installed && isVetKind(kind)) void ensureVetted(kind);
   return resultResponse(r);
 }
 
@@ -953,6 +973,7 @@ async function dispatch(method: string, req: Request, path: string[]): Promise<R
     if (key === "playback" && path.length === 7 && path[5] === "subtitles" && path[6] === "body") {
       return playbackSubtitleBody(req, path);
     }
+    if (key === "sources" && path[1] === "vet") return sourcesVet(req);
     if (key === "sources" && path[1] === "repos" && path[2] === "refresh") return reposRefresh(req);
     if (key === "sources" && path[1] === "repos") return reposPost(req);
     if (key === "stickers" && path[1] === "placements") return placementsPost(req);

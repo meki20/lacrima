@@ -1,10 +1,11 @@
 import { db, plain, type Anchor } from "./db.ts";
 import type { Media, MediaKind, ProviderSlug } from "./media.ts";
+import { KIND_INFO, isStandalone, isVideoKind } from "./kinds.ts";
 import { ensureLibrary, getLibrary, removeLibrary } from "./library.ts";
 import { awardForTitle } from "./stickers.ts";
 import { isNightHour, markActivity } from "./yours.ts";
 import { franchiseKey, franchiseLabel, seriesTitle } from "./series.ts";
-import { ANIME_EPISODE_SECONDS, heldUnit, keepsResumeAnchor, skipWatchSeconds, spanWatchSeconds, usesSeriesTree, type SeriesPartMark } from "./progress-write.ts";
+import { defaultRuntimeSeconds, heldUnit, keepsResumeAnchor, skipWatchSeconds, spanWatchSeconds, usesSeriesTree, type SeriesPartMark } from "./progress-write.ts";
 
 export type ProgressRow = {
   profile_id: number;
@@ -68,11 +69,11 @@ export async function setProgress(p: {
   const ep =
     p.durationSeconds && p.durationSeconds > 1
       ? p.durationSeconds
-      : p.media.kind === "anime" && (p.skipAhead || p.exact)
-        ? ANIME_EPISODE_SECONDS
+      : p.skipAhead || p.exact
+        ? defaultRuntimeSeconds(p.media.kind)
         : 0;
   let credit = 0;
-  if (p.media.kind === "anime") {
+  if (isVideoKind(p.media.kind)) {
     if (p.exact) {
       const sign = unit >= prevUnit ? 1 : -1;
       credit = sign * spanWatchSeconds(prevUnit, unit, ep);
@@ -133,8 +134,8 @@ export async function setProgress(p: {
   return granted;
 }
 
-function quietAnchor(kind: Media["kind"]): Anchor {
-  if (kind === "anime") return { kind: "seconds", at: 0, chapterId: "-", chapterName: "" };
+export function quietAnchor(kind: Media["kind"]): Anchor {
+  if (isVideoKind(kind)) return { kind: "seconds", at: 0, chapterId: "-", chapterName: "" };
   if (kind === "novel") return { kind: "paragraph", cfi: "0" };
   return { kind: "page", index: 0, chapterId: "-", chapterName: "" };
 }
@@ -197,7 +198,8 @@ export function unitPip(
   season?: number | null,
   episode?: number | null,
 ): string {
-  if (kind === "anime") {
+  if (kind === "movie") return "Movie";
+  if (isVideoKind(kind)) {
     const n = episode && episode > 0 ? episode : unit;
     return season != null && season > 0 ? `S${season}·E${n}` : `Ep. ${n}`;
   }
@@ -234,9 +236,12 @@ export function continueRatio(anchor: Anchor | null): number | null {
   return null;
 }
 
+const unitLabelOf = (kind: MediaKind) =>
+  kind === "movie" ? "movie" : `${KIND_INFO[kind]?.unitWord ?? "chapter"}s`;
+
 export function toContinueItem(r: ProgressRow): ContinueItem {
   const anchor = parseAnchor(r.anchor);
-  const name = seriesTitle(r.title ?? "Untitled");
+  const name = isStandalone(r.media_type) ? (r.title ?? "Untitled") : seriesTitle(r.title ?? "Untitled");
   const base = `/${r.via}/${r.media_type}/${r.media_id}`;
   const season = anchor?.kind === "seconds" ? anchor.season : undefined;
   const episode = anchor?.kind === "seconds" ? anchor.episode : undefined;
@@ -251,7 +256,7 @@ export function toContinueItem(r: ProgressRow): ContinueItem {
     description: null,
     genres: [],
     units: null,
-    unitLabel: r.media_type === "anime" ? "episodes" : "chapters",
+    unitLabel: unitLabelOf(r.media_type),
     score: null,
     pip: unitPip(r.media_type, r.unit, season, episode),
     detail: continueDetail(r.media_type, anchor),
@@ -271,6 +276,14 @@ export function pickContinue(rows: ProgressRow[], limit: number): ContinueItem[]
   const seen = new Set<string>();
   const out: ContinueItem[] = [];
   for (const r of rows) {
+    if (isStandalone(r.media_type)) {
+      const k = `${r.via}|${r.media_type}|${r.media_id}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(toContinueItem(r));
+      if (out.length >= limit) break;
+      continue;
+    }
     const peers = rows
       .filter((x) => x.via === r.via && x.media_type === r.media_type)
       .map((x) => x.title ?? "");
@@ -303,6 +316,12 @@ export function heroAction(
   items: ContinueItem[],
 ): { primary: { href: string; label: string }; secondary?: { href: string; label: string } } {
   const details = `/title/${hero.via}/${hero.kind}/${hero.id}`;
+  if (isStandalone(hero.kind)) {
+    const own = items.find((i) => i.via === hero.via && i.kind === hero.kind && i.id === hero.id);
+    return own
+      ? { primary: { href: own.href, label: "Continue" }, secondary: { href: details, label: "Details" } }
+      : { primary: { href: details, label: "Details" } };
+  }
   const peers = [
     hero.title,
     ...items.filter((i) => i.via === hero.via && i.kind === hero.kind).map((i) => i.title),

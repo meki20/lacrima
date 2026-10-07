@@ -11,10 +11,20 @@ let handle: DatabaseSync | undefined;
 export function db(): DatabaseSync {
   if (handle) return handle;
   mkdirSync(dirname(FILE), { recursive: true });
-  handle = new DatabaseSync(FILE);
-  handle.exec("pragma journal_mode = wal");
-  handle.exec("pragma foreign_keys = on");
-  migrate(handle);
+  const d = new DatabaseSync(FILE);
+  // Next's dev server renders in several processes at once. Without a busy timeout the
+  // second writer fails on the spot with "database is locked", and that is a 500.
+  d.exec("pragma busy_timeout = 5000");
+  d.exec("pragma journal_mode = wal");
+  d.exec("pragma foreign_keys = on");
+  // Only once migrated: a handle that failed to migrate must be retried, not reused.
+  try {
+    migrate(d);
+  } catch (e) {
+    d.close();
+    throw e;
+  }
+  handle = d;
   return handle;
 }
 
@@ -27,7 +37,7 @@ export function db(): DatabaseSync {
  * source_bindings is deliberately NOT scoped to a profile — which source carries
  * a title is a fact about the world, not about a user.
  */
-const MIGRATIONS: string[] = [
+export const MIGRATIONS: string[] = [
   // 1 — initial schema
   `
     create table if not exists profiles (
@@ -355,20 +365,81 @@ const MIGRATIONS: string[] = [
       primary key (profile_id, via, media_id, chapter_id)
     );
   `,
+
+  // 18 — movies and dramas. Only columns: kind columns are unconstrained text, so
+  //      new kinds need no rebuild. hidden_kinds is a comma list of categories this
+  //      profile turned off ('' = all visible).
+  `
+    alter table profile_settings add column hidden_kinds text not null default '';
+    alter table activity add column movie integer not null default 0;
+    alter table activity add column drama integer not null default 0;
+  `,
+
+  // 19 — the "drama" kind became "series" (Drama is a genre chip inside it). Rows are
+  //      renamed in place: kind columns are unconstrained text and no unique key
+  //      includes them. activity.drama stays (SQLite can't cheaply drop it) but is
+  //      no longer written; its counts move to the new activity.series.
+  //      hidden_kinds is a comma list: swap the token, or drop it if a "series"
+  //      token is somehow already there.
+  `
+    update library set media_type = 'series' where media_type = 'drama';
+    update progress set media_type = 'series' where media_type = 'drama';
+    update source_bindings set kind = 'series' where kind = 'drama';
+    update profile_settings set hidden_kinds = case
+      when instr(',' || hidden_kinds || ',', ',drama,') = 0 then hidden_kinds
+      when instr(',' || hidden_kinds || ',', ',series,') > 0
+        then trim(replace(',' || hidden_kinds || ',', ',drama,', ','), ',')
+      else trim(replace(',' || hidden_kinds || ',', ',drama,', ',series,'), ',')
+    end;
+    alter table activity add column series integer not null default 0;
+    update activity set series = drama;
+  `,
+
+  // 20 — every source is vetted against ten fixed titles and scored 0-10. `confirmed_at`
+  //      is when the first conclusive vet happened: only that one may switch a source
+  //      off on its own, so a source the user turned back on stays on.
+  `
+    create table source_vets (
+      kind         text    not null,
+      id           text    not null,
+      status       text    not null,
+      score        real,
+      hits         integer,
+      scope        integer,
+      avg_ms       integer,
+      median_ms    integer,
+      alive        real,
+      note         text,
+      vetted_at    integer not null,
+      confirmed_at integer,
+      auto_off     integer not null default 0,
+      primary key (kind, id)
+    );
+  `,
 ]
 
-function migrate(d: DatabaseSync) {
-  const { user_version: at } = d.prepare("pragma user_version").get() as {
-    user_version: number;
-  };
+export function migrate(d: DatabaseSync, steps: string[] = MIGRATIONS) {
+  // One transaction, taken before the version is read. Processes opening the file at the
+  // same moment queue here instead of both running the same step (the second would die on
+  // "duplicate column"), and a step that fails halfway leaves no half-migrated schema.
+  d.exec("begin immediate");
+  try {
+    const { user_version: at } = d.prepare("pragma user_version").get() as {
+      user_version: number;
+    };
 
-  for (let v = at; v < MIGRATIONS.length; v++) {
-    d.exec(MIGRATIONS[v]);
-    d.exec(`pragma user_version = ${v + 1}`);
+    for (let v = at; v < steps.length; v++) {
+      d.exec(steps[v]);
+      d.exec(`pragma user_version = ${v + 1}`);
+    }
+
+    const { n } = d.prepare("select count(*) as n from profiles").get() as { n: number };
+    if (n === 0) seed(d);
+    d.exec("commit");
+  } catch (e) {
+    d.exec("rollback");
+    throw e;
   }
-
-  const { n } = d.prepare("select count(*) as n from profiles").get() as { n: number };
-  if (n === 0) seed(d);
 }
 
 /**

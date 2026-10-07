@@ -15,7 +15,7 @@
  * profile; that keeps the broad source pool usable without taxing normal playback.
  */
 import { spawn } from "node:child_process";
-import type { Lang } from "./audio.ts";
+import { parseLangToken, type Lang } from "./audio.ts";
 
 export const FFMPEG = process.env.LACRIMA_FFMPEG ?? "ffmpeg";
 const FFPROBE = process.env.LACRIMA_FFPROBE ?? "ffprobe";
@@ -44,31 +44,56 @@ export function selfRelayUrl(url: URL | string): string {
  * keyframe, and `default_base_moof` keeps byte offsets relative so a stream that
  * began mid-file is still valid.
  */
-/** ISO-639-2 codes ffmpeg matches on, for the languages we offer. */
-const ISO3: Record<Lang, string> = {
-  ja: "jpn",
-  en: "eng",
-  it: "ita",
-  de: "deu",
-  fr: "fra",
-  es: "spa",
-  pt: "por",
-  hi: "hin",
-  ko: "kor",
-  zh: "zho",
-  ru: "rus",
+/**
+ * ISO-639-2 codes ffmpeg matches on, for the languages we offer.
+ *
+ * ffmpeg compares the tag as a plain string, and ISO 639-2 spells Chinese, French and
+ * German two ways (terminologic `zho`/`fra`/`deu`, bibliographic `chi`/`fre`/`ger`).
+ * Releases use both: an HdHub file carrying Hindi and Chinese tags its Chinese `chi`, so
+ * asking for `zho` matched nothing and the viewer was handed the Hindi track.
+ */
+const ISO3: Record<Lang, string[]> = {
+  ja: ["jpn"],
+  en: ["eng"],
+  it: ["ita"],
+  de: ["deu", "ger"],
+  fr: ["fra", "fre"],
+  es: ["spa"],
+  pt: ["por"],
+  hi: ["hin"],
+  ko: ["kor"],
+  zh: ["zho", "chi", "cmn"],
+  ru: ["rus"],
 };
+
+/** How many tag spellings `alias` can run through for this language. */
+export const aliasCount = (lang: Lang) => ISO3[lang].length;
+
+const isoFor = (lang?: Lang, alias = 0) => (lang ? (ISO3[lang][alias] ?? ISO3[lang][0]) : null);
+
+/**
+ * The speech band of the audio being played, mono s16le, written beside the video
+ * so `lib/sub-align.ts` can check subtitle files against it. It is a second output of
+ * the same ffmpeg, so it costs no extra download from the source and measures exactly
+ * the audio the viewer hears. Capped, so a feature film is not 100 MB of scratch.
+ */
+export const TAP_RATE = 8000;
+export const TAP_SECONDS = 600;
 
 export function remuxArgs(
   url: string,
   opts: {
     lang?: Lang;
+    /** Which of the language's tag spellings to match; see `ISO3`. */
+    alias?: number;
     audioIndex?: number;
     copyAudio?: boolean;
     seek?: number;
     referer?: string | null;
     pack?: "mp4" | "ts";
     transcodeVideo?: boolean;
+    /** Also write the speech-band PCM here; see `TAP_RATE`. */
+    tap?: string;
   },
 ): string[] {
   const http = /^https?:\/\//i.test(url);
@@ -76,6 +101,7 @@ export function remuxArgs(
   const args = [
     "-hide_banner",
     "-loglevel", "error",
+    ...(opts.tap ? ["-y"] : []),
     ...(opts.referer && http ? ["-headers", `Referer: ${opts.referer}\r\n`] : []),
     ...(http
       ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
@@ -84,7 +110,7 @@ export function remuxArgs(
   if (seeking) args.push("-ss", String(opts.seek));
   args.push("-i", url, "-map", "0:v:0");
 
-  const iso = opts.lang ? ISO3[opts.lang] : null;
+  const iso = isoFor(opts.lang, opts.alias);
   if (opts.audioIndex != null) args.push("-map", `0:${opts.audioIndex}`);
   else if (iso) args.push("-map", `0:a:m:language:${iso}`);
   else args.push("-map", "0:a:0?");
@@ -100,6 +126,9 @@ export function remuxArgs(
       args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", seeking ? "18" : "20");
     }
     args.push("-pix_fmt", "yuv420p", "-profile:v", "high");
+    if (opts.pack === "ts" && opts.transcodeVideo) {
+      args.push("-force_key_frames", "expr:gte(t,n_forced*4)");
+    }
   } else args.push("-c:v", "copy");
   /* A seek must rebuild the audio timeline too. Copying AAC here preserves its
      old timestamps, leaving the new zero-based video silent after a restart. */
@@ -126,11 +155,22 @@ export function remuxArgs(
       "pipe:1",
     );
   }
+  if (opts.tap) {
+    args.push(
+      ...mapAudio(opts),
+      "-ac", "1",
+      "-ar", String(TAP_RATE),
+      "-af", "highpass=f=300,lowpass=f=3400",
+      "-t", String(TAP_SECONDS),
+      "-f", "s16le",
+      opts.tap,
+    );
+  }
   return args;
 }
 
-function mapAudio(opts: { lang?: Lang; audioIndex?: number }): string[] {
-  const iso = opts.lang ? ISO3[opts.lang] : null;
+function mapAudio(opts: { lang?: Lang; alias?: number; audioIndex?: number }): string[] {
+  const iso = isoFor(opts.lang, opts.alias);
   if (opts.audioIndex != null) return ["-map", `0:${opts.audioIndex}`];
   if (iso) return ["-map", `0:a:m:language:${iso}`];
   return ["-map", "0:a:0?"];
@@ -281,8 +321,9 @@ export function probeAudio(
           }[];
         }).streams ?? [];
         const audio = streams.filter((s) => s.codec_type === "audio");
-        const iso = ISO3[lang];
-        const exact = audio.find((s) => s.tags?.language?.toLowerCase() === iso);
+        /* `fre`, `ger` and `chi` are as valid as `fra`, `deu` and `zho`; matching only the
+           latter dropped every French or German track that used the other spelling. */
+        const exact = audio.find((s) => parseLangToken(s.tags?.language) === lang);
         const only = audio.length === 1 ? audio[0] : null;
         const tag = only?.tags?.language?.toLowerCase();
         const chosen = exact ?? (only && (!tag || tag === "und") ? only : null);
@@ -309,12 +350,14 @@ export function remuxStream(
   url: string,
   opts: {
     lang?: Lang;
+    alias?: number;
     audioIndex?: number;
     copyAudio?: boolean;
     seek?: number;
     referer?: string | null;
     pack?: "mp4" | "ts";
     transcodeVideo?: boolean;
+    tap?: string;
   },
   signal?: AbortSignal,
 ): ReadableStream<Uint8Array> {

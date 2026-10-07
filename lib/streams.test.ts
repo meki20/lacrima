@@ -589,3 +589,16 @@ test("langChoices and qualitiesForLang split a mixed playlist the way the dock d
   assert.deepEqual(enQ, ["1080p"]);
   assert.equal(qualitiesForLang(groups, "fr").length, 0);
 });
+
+test("untagged releases of a film land in its own language and lead the menu", () => {
+  const rows = [
+    { text: "The.Shawshank.Redemption.1994.1080p.BluRay.x264.AAC", url: "/api/stream?ih=rip", provider: "TorrentsDB" },
+    { text: "Les Evades 1994 1080p MULTi FR EN", url: "/api/stream?ih=multi", provider: "Meteor" },
+  ];
+  const film = present(rows, undefined, "en");
+  assert.equal(film.preferred, "1080p-en");
+  assert.ok(film.groups.find((g) => g.id === "1080p-en")?.picks.some((p) => p.url === "/api/stream?ih=rip"));
+  assert.ok(!film.groups.some((g) => g.lang === "ja"));
+  // Unchanged for anime: the default is still Japanese.
+  assert.equal(present(rows).preferred, "1080p-ja");
+});

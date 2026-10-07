@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ApiFault, finiteNumber, jsonObject, parseKind, positiveId, profileFromHeaders, resultEnvelope } from "./http.ts";
+import { ApiFault, finiteNumber, inV1Lists, jsonObject, parseKind, parseProvider, positiveId, profileFromHeaders, resultEnvelope } from "./http.ts";
 import { Err, Ok } from "../result.ts";
 import type { Profile } from "../profile.ts";
 
@@ -30,9 +30,21 @@ test("source Result keeps failure distinct from an empty success", () => {
 
 test("trust-boundary parsers reject ambiguous route input", async () => {
   assert.equal(parseKind("novel"), "novel");
+  assert.equal(parseKind("movie"), "movie");
+  assert.equal(parseKind("series"), "series");
+  // The retired name still resolves: an old client or bookmark must not 400.
+  assert.equal(parseKind("drama"), "series");
   assert.throws(() => parseKind("book"), ApiFault);
+  assert.throws(() => parseKind("movies"), (e) => e instanceof ApiFault && e.code === "invalid_kind");
+  assert.equal(parseProvider("tmdb-movie"), "tmdb-movie");
+  assert.equal(parseProvider("cinemeta"), "cinemeta");
+  assert.throws(() => parseProvider("tmdb"), (e) => e instanceof ApiFault && e.code === "invalid_provider");
   assert.equal(positiveId("42"), 42);
   assert.throws(() => positiveId("4.2"), ApiFault);
   assert.equal(finiteNumber("1.5"), 1.5);
   await assert.rejects(() => jsonObject(new Request("http://x", { method: "POST", body: "[]" })), ApiFault);
+});
+
+test("v1 lists stay anime, manga and novel; movies and series are additive", () => {
+  assert.deepEqual((["anime", "manga", "novel", "movie", "series"] as const).filter(inV1Lists), ["anime", "manga", "novel"]);
 });

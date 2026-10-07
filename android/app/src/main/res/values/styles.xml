@@ -1,5 +1,6 @@
 <resources>
-    <style name="Theme.Lacrima" parent="android:style/Theme.Material.NoActionBar">
+    <style name="Theme.Lacrima" parent="Theme.AppCompat.NoActionBar">
+        <item name="colorPrimary">#0c0908</item>
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>

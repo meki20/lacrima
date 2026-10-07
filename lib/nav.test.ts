@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { firstPlay, navTabForKind, playHref, playLabel, titleBackHref, dockSeasons } from "./nav.ts";
+import { firstPlay, navTabForKind, nextPlayable, playHref, playLabel, titleBackHref, dockSeasons } from "./nav.ts";
 
 test("navTabForKind follows browse tabs, never Yours", () => {
   assert.equal(navTabForKind("anime"), "Anime");
@@ -74,4 +74,46 @@ test("dockSeasons groups a franchise, specials last, and a flat list as one seas
   assert.equal(flat.length, 1);
   assert.equal(flat[0].label, "Season 1");
   assert.equal(flat[0].items.length, 2);
+});
+
+test("navTabForKind covers all five kinds", () => {
+  assert.equal(navTabForKind("movie"), "Movies");
+  assert.equal(navTabForKind("series"), "Series");
+});
+
+test("playLabel names a film and a series episode by what the viewer sees", () => {
+  assert.equal(playLabel("movie", 1), "Watch movie");
+  assert.equal(playLabel("series", 4, 1), "Play S1·E4");
+  assert.equal(playLabel("series", 4, 12), "Play S12·E4");
+  assert.equal(playLabel("series", 4), "Play E4");
+  assert.equal(playLabel("series", 4, 0), "Play E4");
+  assert.equal(playLabel("anime", 3), "Play episode 3");
+});
+
+test("a series' next episode crosses seasons; a film has none; specials are not auto-played", () => {
+  const eps = [
+    { id: "s1e1", number: 1, season: 1 },
+    { id: "s1e2", number: 2, season: 1 },
+    { id: "s2e1", number: 1, season: 2 },
+    { id: "sp1", number: 1, season: 0 },
+    { id: "sp2", number: 2, season: 0 },
+  ];
+  assert.equal(nextPlayable("series", eps, "s1e1")?.id, "s1e2");
+  assert.equal(nextPlayable("series", eps, "s1e2")?.id, "s2e1");
+  assert.equal(nextPlayable("series", eps, "s2e1"), null);
+  assert.equal(nextPlayable("series", eps, "sp1")?.id, "sp2");
+  assert.equal(nextPlayable("series", eps, "sp2"), null);
+  assert.equal(nextPlayable("series", eps, "missing"), null);
+  assert.equal(nextPlayable("movie", [{ id: "imdb::tt0111161" }], "imdb::tt0111161"), null);
+  // anime keeps walking the list as before
+  assert.equal(nextPlayable("anime", eps, "s2e1")?.id, "sp1");
+});
+
+test("a series' Play button opens the first regular episode, a movie's the film", () => {
+  const eps = [
+    { id: "imdb::tt1:1:1", number: 1, season: 1 },
+    { id: "imdb::tt1:2:1", number: 1, season: 2 },
+  ];
+  assert.equal(firstPlay("series", eps)?.id, "imdb::tt1:1:1");
+  assert.equal(firstPlay("movie", [{ id: "imdb::tt1", number: 1 }])?.id, "imdb::tt1");
 });

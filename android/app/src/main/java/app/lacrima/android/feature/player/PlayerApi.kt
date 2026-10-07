@@ -45,21 +45,36 @@ class PlayerApi(private val client: ApiClient) {
             is ApiResult.Failure -> result
             is ApiResult.Success -> runCatching {
                 val root = result.data as? JSONObject ?: error("Subtitle data is not an object.")
-                root.optJSONArray("subtitles")?.objects()?.mapNotNull { cue ->
-                    val original = cue.stringOrNull("url") ?: return@mapNotNull null
-                    val src = cue.stringOrNull("src")?.let(client::absolute) ?: return@mapNotNull null
-                    SubtitleChoice(
-                        id = cue.optString("id", original),
-                        lang = cue.optString("lang"),
-                        label = cue.optString("label", cue.optString("lang")),
-                        url = original,
-                        type = cue.optString("type", "vtt"),
-                        src = src,
-                    )
-                }.orEmpty()
+                root.optJSONArray("subtitles")?.objects()?.mapNotNull(::subtitleChoice).orEmpty()
             }.fold(
                 onSuccess = { ApiResult.Success(it) },
                 onFailure = { ApiResult.Failure("invalid_subtitles", it.message ?: "Unreadable subtitle response.") },
+            )
+        }
+    }
+
+    /** Poll the same local extractor as the web player while a selected torrent grows. */
+    fun embeddedSubtitles(route: PlaybackRoute, streamUrl: String): ApiResult<EmbeddedSubtitleResult> {
+        val query = buildList {
+            add("chapterId=${ApiClient.encode(route.chapterId)}")
+            add("via=${ApiClient.encode(route.via)}")
+            add("mediaId=${route.mediaId}")
+            add("local=1")
+            for (name in listOf("ih", "i", "s", "e")) {
+                queryValues(streamUrl, name).firstOrNull()?.let { add("$name=${ApiClient.encode(it)}") }
+            }
+        }.joinToString("&")
+        return when (val result = client.getAbsoluteJson("/api/subs?$query")) {
+            is ApiResult.Failure -> result
+            is ApiResult.Success -> runCatching {
+                val root = result.data as? JSONObject ?: error("Embedded subtitle data is not an object.")
+                EmbeddedSubtitleResult(
+                    cues = root.optJSONArray("cues")?.objects()?.mapNotNull(::subtitleChoice).orEmpty(),
+                    pending = root.optBoolean("pending", false),
+                )
+            }.fold(
+                onSuccess = { ApiResult.Success(it) },
+                onFailure = { ApiResult.Failure("invalid_subtitles", it.message ?: "Unreadable embedded subtitle response.") },
             )
         }
     }
@@ -125,6 +140,19 @@ class PlayerApi(private val client: ApiClient) {
     /** Warm only after the current episode can play; the server owns all source work. */
     fun warmNext(document: PlaybackDocument) {
         document.nextPlaybackUrl?.let { client.getAbsoluteJson(it) }
+    }
+
+    private fun subtitleChoice(cue: JSONObject): SubtitleChoice? {
+        val original = cue.stringOrNull("url") ?: return null
+        val src = cue.stringOrNull("src")?.let(client::absolute) ?: return null
+        return SubtitleChoice(
+            id = cue.optString("id", original),
+            lang = cue.optString("lang"),
+            label = cue.optString("label", cue.optString("lang")),
+            url = original,
+            type = cue.optString("type", "vtt"),
+            src = src,
+        )
     }
 
     private fun parseDocument(raw: Any, route: PlaybackRoute): PlaybackDocument {

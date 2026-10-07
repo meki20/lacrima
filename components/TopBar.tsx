@@ -2,6 +2,8 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { currentProfile } from "@/lib/profile";
 import { allRemoteSources } from "@/lib/sources";
+import { navEntries, sourceSummary, type NavEntry } from "@/lib/browse";
+import { visibleFor } from "@/lib/kinds-server";
 import SearchField from "./SearchField";
 import StickerPicker from "./StickerPicker";
 
@@ -9,17 +11,12 @@ import StickerPicker from "./StickerPicker";
 async function health() {
   const r = await allRemoteSources();
   if (!r.ok) return { color: "var(--danger)", label: "backend down", title: r.reason };
-  const by = { manga: 0, anime: 0, novel: 0 };
-  for (const s of r.value) by[s.kind]++;
-  const parts = (["manga", "anime", "novel"] as const)
-    .map((k) => (by[k] ? `${by[k]} ${k === "novel" ? "novels" : k}` : null))
-    .filter(Boolean);
   const n = r.value.length;
   return n === 0
     ? { color: "var(--warn)", label: "no sources", title: "No source repositories added yet" }
     : {
         color: "var(--ok)",
-        label: parts.join(" · ") || `${n} sources`,
+        label: sourceSummary(r.value.map((s) => s.kind)) || `${n} sources`,
         title: r.value.map((s) => `${s.kind}: ${s.name}`).join(", "),
       };
 }
@@ -34,13 +31,18 @@ async function HealthChip() {
   );
 }
 
-const TABS = [
-  ["Home", "/", "M4 10.5 12 3l8 7.5V20h-6v-6H10v6H4z"],
-  ["Anime", "/anime", "M8 5.5v13l11-6.5z"],
-  ["Manga", "/manga", "M5 4h9a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3 3V4z"],
-  ["Novels", "/novels", "M12 5c-2-1.2-5-1.5-8-.8v14c3-.7 6-.4 8 .8 2-1.2 5-1.5 8-.8v-14c-3-.7-6-.4-8 .8z"],
-  ["Yours", "/yours", "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM5.5 20a6.5 6.5 0 0 1 13 0"],
-] as const;
+/** Icon per nav entry, keyed by kind (or label for Home and Yours). The entries come from lib/browse.ts. */
+const ICON: Record<string, string> = {
+  Home: "M4 10.5 12 3l8 7.5V20h-6v-6H10v6H4z",
+  anime: "M8 5.5v13l11-6.5z",
+  manga: "M5 4h9a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3 3V4z",
+  novel: "M12 5c-2-1.2-5-1.5-8-.8v14c3-.7 6-.4 8 .8 2-1.2 5-1.5 8-.8v-14c-3-.7-6-.4-8 .8z",
+  movie: "M4 5h16v14H4zM8 5v14M16 5v14M4 9.5h4M4 14.5h4M16 9.5h4M16 14.5h4",
+  series: "M3 8h18v11H3zM8 3.5 12 8l4-4.5",
+  Yours: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM5.5 20a6.5 6.5 0 0 1 13 0",
+};
+
+const tabs = (entries: NavEntry[]) => entries.map((e) => [e.label, e.href, ICON[e.kind ?? e.label]] as const);
 
 const MORE = [
   ["Stickers", "/stickers", "M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2"],
@@ -48,7 +50,7 @@ const MORE = [
   ["Settings", "/settings", "settings"],
 ] as const;
 
-type Tab = (typeof TABS)[number] | (typeof MORE)[number];
+type Tab = readonly [label: string, href: string, icon: string];
 
 function Icon({ d }: { d: string }) {
   return (
@@ -78,11 +80,11 @@ function Icon({ d }: { d: string }) {
 function Tabs({
   active,
   className,
-  items = TABS,
+  items,
 }: {
   active: string;
   className: string;
-  items?: readonly Tab[];
+  items: readonly Tab[];
 }) {
   return (
     <nav className={className}>
@@ -98,6 +100,8 @@ function Tabs({
 
 export default async function TopBar({ active = "Home" }: { active?: string }) {
   const me = await currentProfile();
+  // One list feeds the sidebar and the bottom bar. Home and Yours are not categories, so they stay.
+  const primary = tabs(navEntries(visibleFor(me.id)));
 
   return (
     <>
@@ -107,7 +111,7 @@ export default async function TopBar({ active = "Home" }: { active?: string }) {
         </Link>
         <div>
           <div className="side-label">MENU</div>
-          <Tabs active={active} className="tabs" />
+          <Tabs active={active} className="tabs" items={primary} />
           <hr className="side-rule" />
           <Tabs active={active} className="tabs" items={MORE} />
         </div>
@@ -137,7 +141,7 @@ export default async function TopBar({ active = "Home" }: { active?: string }) {
         </Link>
       </div>
 
-      <Tabs active={active} className="bottomnav" />
+      <Tabs active={active} className="bottomnav" items={primary} />
     </>
   );
 }
